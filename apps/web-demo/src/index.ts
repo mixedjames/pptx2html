@@ -1,7 +1,9 @@
 import { readPresentation } from '@pptx2html/reader';
+import { renderPresentation } from '@pptx2html/to-html5';
 
 const fileInput = document.getElementById('file-input');
 const status = document.getElementById('status');
+const output = document.getElementById('output');
 
 function setStatus(message: string): void {
   if (status) status.textContent = message;
@@ -18,9 +20,8 @@ if (fileInput instanceof HTMLInputElement) {
       .then((buffer) => {
         const presentation = readPresentation(new Uint8Array(buffer));
         console.log(presentation);
-        setStatus(
-          `Parsed ${file.name}: ${presentation.slides.length} slide(s). See the console for the full object tree.`,
-        );
+        output?.replaceChildren(renderPresentation(presentation));
+        setStatus(`Parsed ${file.name}: ${presentation.slides.length} slide(s).`);
       })
       .catch((error: unknown) => {
         console.error(error);

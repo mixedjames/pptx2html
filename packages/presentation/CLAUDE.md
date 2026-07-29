@@ -6,12 +6,13 @@ organized the same way the spec itself is split: DrawingML (§20, shapes/color/f
 text primitives shared across all of OOXML) vs. PresentationML (§19,
 presentation-specific parts).
 
-## Status: skeleton, consumed by a working reader
+## Status: skeleton, consumed by a working reader and a first-pass renderer
 
 The type graph is complete enough that `@pptx2html/reader` parses real `.pptx`
-byte streams into it end-to-end (see `packages/reader/CLAUDE.md`). Nothing renders
-yet — there is no HTML/DOM output stage. `tsc -b`, `eslint`, `vitest run` and
-`prettier --check` are all green.
+byte streams into it end-to-end (see `packages/reader/CLAUDE.md`), and
+`@pptx2html/to-html5` renders the result into a laid-out HTML5 DOM (layout only,
+no visual formatting yet — see `packages/to-html5/CLAUDE.md`). `tsc -b`, `eslint`,
+`vitest run` and `prettier --check` are all green.
 
 ## Key design decision: resolved object graph, not relationship IDs
 
@@ -38,7 +39,9 @@ package itself has no construction helpers; it only declares the shape.
   transform modifiers), `geometry.ts` (`Transform2D`, preset/custom geometry),
   `media.ts` (`MediaPart`), `fill.ts` (none/solid/gradient/pattern/blip),
   `line.ts`, `text.ts` (`TextBody`/`Paragraph`/`TextRun`/`LineBreak`/`TextField`),
-  `shape-common.ts` (`NonVisualDrawingProperties`, `ShapeProperties`).
+  `shape-common.ts` (`NonVisualDrawingProperties` — including `Placeholder`
+  type/index, used to resolve a placeholder shape's inherited position/size when
+  it has none of its own — and `ShapeProperties`).
 - `theme.ts` — `ColorScheme` (12 named slots), `FontScheme`, `FormatScheme`.
 - `presentationml/` — `shape-tree.ts` (`Shape`/`Picture`/`ConnectionShape`/
   `GraphicFrame`/`GroupShape`, the `ShapeTreeNode` union), `table.ts`,
@@ -75,10 +78,8 @@ avoiding.
 
 ## Next likely steps
 
-1. Pick one item off the unmodeled list above based on what a first renderer
-   milestone actually needs (custom geometry and bullet/numbering are the two
-   most likely to visibly matter first).
-2. Start a rendering package (e.g. `packages/renderer` or directly in
-   `apps/web-demo`) that walks this tree and produces HTML/CSS — nothing consumes
-   the resolved object graph for display yet, only `console.log`s it
-   (`apps/web-demo/src/index.ts`, per `packages/reader/CLAUDE.md`'s open TODOs).
+1. Pick one item off the unmodeled list above based on what `@pptx2html/to-html5`'s
+   formatting pass actually needs next (fill/line/color and run-level text styling
+   are the most likely to visibly matter first — see that package's CLAUDE.md).
+2. Custom geometry path data and bullet/numbering are the two remaining layout
+   (not just formatting) gaps most likely to visibly matter.

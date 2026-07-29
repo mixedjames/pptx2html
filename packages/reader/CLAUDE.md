@@ -33,7 +33,13 @@ this writing.
   transparently unwraps `mc:AlternateContent` to its `mc:Fallback` (or first
   `mc:Choice` if no fallback) wherever nodes are walked.
 - `drawingml/`, `theme.ts`, `presentationml/` — one parser file per model file in
-  `packages/presentation/src`.
+  `packages/presentation/src`. `drawingml/shape-common.ts`'s
+  `parseNonVisualDrawingProperties` also parses a shape's `nvPr/ph` (§19.3.1.36,
+  placeholder type/idx) when present — the reader only extracts this identity, it
+  does **not** resolve placeholder inheritance (matching a slide placeholder to
+  its layout/master counterpart to find an inherited transform); that's
+  `@pptx2html/to-html5`'s job, since it needs the sibling layout/master shapes to
+  do it (see that package's `placeholder.ts`).
 - `reader-context.ts` — `ReaderContext`, threaded through every parser: the
   `OpcPackage` plus part-name-keyed caches (`themes`, `slideMasters`,
   `slideLayouts`, `notesMasters`, `slides`, `media`) so a part referenced from
@@ -82,16 +88,13 @@ re-parsing).
   `/Users/james/.claude/plans/sleepy-snuggling-oasis.md` for the original
   reasoning (real output exercises `mc:AlternateContent`/prefix-binding quirks that
   hand-written XML won't naturally produce).
-- **`apps/web-demo` integration is in progress, not yet manually verified.** It now
-  depends on `@pptx2html/reader` (not `@pptx2html/core`), has a `<input type=file
-  accept=".pptx">` picker in `src/index.html`, and `src/index.ts` calls
-  `readPresentation` on the selected file and `console.log`s the result plus a
-  short status line. Build/lint/format are clean and the webpack dev server was
-  confirmed serving the page correctly (`curl` + compiled bundle inspection), but
-  nobody has clicked through it in an actual browser yet — do that before
-  considering it done. The dev server may still be running in the background from
-  this session (`lsof -ti:8080` to check, `npm run start --workspace
-  @pptx2html/web-demo` to relaunch).
+- **`apps/web-demo` now renders into the page, not just `console.log`.** It depends
+  on both `@pptx2html/reader` and `@pptx2html/to-html5`; `src/index.ts` calls
+  `readPresentation` on the picked file, then `renderPresentation` and appends the
+  result to `#output` in `src/index.html`. There's a real fixture at
+  `apps/web-demo/src/Presentation1.pptx` for manual testing. Build/lint/format are
+  clean; browser verification is on the user to do themselves (per their
+  preference, not something to launch/kill the dev server for unprompted).
 - **A sample-`.pptx`-generator script was drafted but never run**, at
   `/private/tmp/claude-501/-Users-james-Documents-Projects-Dev-pptx2html/5ecec0b5-082a-4a69-b5b0-ac3621203780/scratchpad/make-sample-pptx.mjs`
   (session-scoped scratch path, not part of the repo). It builds the same kind of

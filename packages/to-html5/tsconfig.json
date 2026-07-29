@@ -6,5 +6,5 @@
     "rootDir": "src"
   },
   "include": ["src"],
-  "references": [{ "path": "../../packages/reader" }, { "path": "../../packages/to-html5" }]
+  "references": [{ "path": "../presentation" }]
 }
