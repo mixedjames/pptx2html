@@ -8,6 +8,6 @@
     "start": "webpack serve --mode development"
   },
   "dependencies": {
-    "@pptx2html/core": "*"
+    "@pptx2html/reader": "*"
   }
 }

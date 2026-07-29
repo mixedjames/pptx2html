@@ -1,0 +1,17 @@
+{
+  "name": "@pptx2html/reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@pptx2html/presentation": "*",
+    "fast-xml-parser": "^5.10.1",
+    "fflate": "^0.8.3"
+  }
+}

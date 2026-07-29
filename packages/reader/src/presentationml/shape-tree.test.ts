@@ -1,0 +1,96 @@
+import { describe, expect, it } from 'vitest';
+
+import type { MediaResolver } from '../drawingml/fill.js';
+import { parseXml } from '../xml/parse.js';
+import { parseShapeTree } from './shape-tree.js';
+
+const noMedia: MediaResolver = () => undefined;
+const withImage: MediaResolver = (id) =>
+  id === 'rId1' ? { contentType: 'image/png', data: new Uint8Array([9]) } : undefined;
+
+describe('presentationml/shape-tree', () => {
+  it('parses a mix of shape kinds in document order and recurses into groups', () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a" xmlns:r="r">
+        <p:nvGrpSpPr><p:cNvPr id="1" name="tree"/></p:nvGrpSpPr>
+        <p:grpSpPr/>
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="2" name="Title 1"/></p:nvSpPr>
+          <p:spPr/>
+        </p:sp>
+        <p:cxnSp>
+          <p:nvCxnSpPr><p:cNvPr id="3" name="Connector 1"/></p:nvCxnSpPr>
+          <p:spPr/>
+          <p:stCxn id="2" idx="1"/>
+          <p:endCxn id="5" idx="3"/>
+        </p:cxnSp>
+        <p:graphicFrame>
+          <p:nvGraphicFramePr><p:cNvPr id="4" name="Chart 1"/></p:nvGraphicFramePr>
+          <p:xfrm><a:off x="0" y="0"/><a:ext cx="100" cy="100"/></p:xfrm>
+          <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"/></a:graphic>
+        </p:graphicFrame>
+        <p:grpSp>
+          <p:nvGrpSpPr><p:cNvPr id="5" name="Group 1"/></p:nvGrpSpPr>
+          <p:grpSpPr><a:xfrm><a:off x="1" y="1"/><a:ext cx="2" cy="2"/></a:xfrm></p:grpSpPr>
+          <p:sp>
+            <p:nvSpPr><p:cNvPr id="6" name="Nested 1"/></p:nvSpPr>
+            <p:spPr/>
+          </p:sp>
+        </p:grpSp>
+      </p:spTree>`,
+    );
+
+    const nodes = parseShapeTree(spTree!, noMedia);
+    expect(nodes.map((n) => n.kind)).toEqual(['shape', 'connector', 'graphicFrame', 'group']);
+
+    const connector = nodes[1];
+    expect(connector).toMatchObject({
+      startConnection: { shapeId: 2, connectionSiteIndex: 1 },
+      endConnection: { shapeId: 5, connectionSiteIndex: 3 },
+    });
+
+    const graphicFrame = nodes[2];
+    expect(graphicFrame).toMatchObject({ graphic: { type: 'chart' } });
+
+    const group = nodes[3];
+    expect(group).toMatchObject({
+      kind: 'group',
+      transform: { offset: { x: 1, y: 1 }, extents: { width: 2, height: 2 } },
+    });
+    if (group?.kind === 'group') {
+      expect(group.children).toHaveLength(1);
+      expect(group.children[0]?.nonVisual.name).toBe('Nested 1');
+    }
+  });
+
+  it('drops a picture whose image relationship cannot be resolved, keeps one that can', () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a" xmlns:r="r">
+        <p:pic>
+          <p:nvPicPr><p:cNvPr id="2" name="Broken"/></p:nvPicPr>
+          <p:blipFill><a:blip r:embed="rIdMissing"/></p:blipFill>
+          <p:spPr/>
+        </p:pic>
+        <p:pic>
+          <p:nvPicPr><p:cNvPr id="3" name="Picture 1"/></p:nvPicPr>
+          <p:blipFill><a:blip r:embed="rId1"/></p:blipFill>
+          <p:spPr/>
+        </p:pic>
+      </p:spTree>`,
+    );
+
+    const nodes = parseShapeTree(spTree!, withImage);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ kind: 'picture', nonVisual: { name: 'Picture 1' } });
+  });
+
+  it('drops a group or graphicFrame missing a required transform', () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a">
+        <p:grpSp><p:nvGrpSpPr/><p:grpSpPr/></p:grpSp>
+        <p:graphicFrame><p:nvGraphicFramePr/></p:graphicFrame>
+      </p:spTree>`,
+    );
+    expect(parseShapeTree(spTree!, noMedia)).toEqual([]);
+  });
+});

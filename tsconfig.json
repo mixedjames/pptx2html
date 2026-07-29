@@ -1,4 +1,9 @@
 {
   "files": [],
-  "references": [{ "path": "packages/core" }, { "path": "apps/web-demo" }]
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/presentation" },
+    { "path": "packages/reader" },
+    { "path": "apps/web-demo" }
+  ]
 }
