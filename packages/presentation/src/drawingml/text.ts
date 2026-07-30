@@ -1,11 +1,60 @@
+import type { Color } from './color.js';
 import type { Fill } from './fill.js';
-import type { FontSize } from './units.js';
+import type { Emu, FontSize, Percentage } from './units.js';
 
 export type TextAlignment = 'left' | 'center' | 'right' | 'justify' | 'distributed';
 
 export type TextAnchor = 't' | 'ctr' | 'b' | 'just';
 
 export type TextWrap = 'none' | 'square';
+
+/**
+ * Auto-numbering scheme for a `buAutoNum` bullet (§20.1.10.51, ST_TextAutonumberScheme) — the ten
+ * schemes real decks overwhelmingly use; several more esoteric variants (double-parenthesis
+ * forms, etc.) are unmodeled for the skeleton.
+ */
+export type AutoNumberScheme =
+  | 'arabicPeriod'
+  | 'arabicParenR'
+  | 'alphaLcPeriod'
+  | 'alphaUcPeriod'
+  | 'alphaLcParenR'
+  | 'alphaUcParenR'
+  | 'romanLcPeriod'
+  | 'romanUcPeriod'
+  | 'romanLcParenR'
+  | 'romanUcParenR';
+
+/**
+ * Fields common to every bullet kind that has a glyph: an optional font/colour/size override,
+ * falling back to the paragraph's own run formatting when unset (§21.1.2.4).
+ */
+interface BulletStyle {
+  readonly font?: string;
+  readonly color?: Color;
+  /** Bullet size as a percentage of the paragraph's own text size (§21.1.2.4.9, a:buSzPct). */
+  readonly sizePercent?: Percentage;
+}
+
+/** Explicitly no bullet (§21.1.2.4.2, a:buNone) — used to suppress one that would otherwise be inherited. */
+export interface NoBullet {
+  readonly type: 'none';
+}
+
+/** A literal bullet character (§21.1.2.4.1, a:buChar). */
+export interface CharBullet extends BulletStyle {
+  readonly type: 'char';
+  readonly char: string;
+}
+
+/** An auto-numbered bullet (§21.1.2.4.3, a:buAutoNum). */
+export interface AutoNumberBullet extends BulletStyle {
+  readonly type: 'autoNum';
+  readonly scheme: AutoNumberScheme;
+  readonly startAt?: number;
+}
+
+export type Bullet = NoBullet | CharBullet | AutoNumberBullet;
 
 /** Run-level character formatting (§21.1.2.3.9, a:rPr and inherited defRPr/endParaRPr). */
 export interface RunProperties {
@@ -40,7 +89,7 @@ export interface TextField {
 
 export type TextRunElement = TextRun | LineBreak | TextField;
 
-/** Paragraph-level formatting (§21.1.2.2.7, a:pPr). Bullet/numbering is unmodeled for the skeleton. */
+/** Paragraph-level formatting (§21.1.2.2.7, a:pPr). */
 export interface ParagraphProperties {
   readonly alignment?: TextAlignment;
   /** Outline/indent level, 0-based. */
@@ -52,6 +101,14 @@ export interface ParagraphProperties {
    * see `to-html5`'s `text-style.ts` for the full run-property inheritance chain.
    */
   readonly defaultRunProperties?: RunProperties;
+  readonly bullet?: Bullet;
+  /** Left margin for the whole paragraph (§21.1.2.2.7, a:pPr's marL). */
+  readonly marginLeft?: Emu;
+  /**
+   * First-line indent relative to `marginLeft` (§21.1.2.2.7, a:pPr's indent) — typically negative
+   * to hang a bullet/number in the resulting gap ahead of the first line's own text.
+   */
+  readonly indent?: Emu;
 }
 
 export interface Paragraph {
@@ -67,13 +124,16 @@ export interface TextBodyProperties {
 
 /**
  * One outline level's defaults within a `TextListStyle` (§21.1.2.4.12, a:lvl1pPr..lvl9pPr —
- * structurally a full paragraph-properties element, but only `algn` and `defRPr` are modeled
- * here; other paragraph-level properties a level can also carry, like indent/bullet/numbering,
- * are unmodeled for the skeleton).
+ * structurally a full paragraph-properties element; `algn`/`defRPr`/bullet/`marL`/`indent` are
+ * modeled, other paragraph-level properties a level can also carry are unmodeled for the
+ * skeleton).
  */
 export interface TextListStyleLevel {
   readonly alignment?: TextAlignment;
   readonly runProperties?: RunProperties;
+  readonly bullet?: Bullet;
+  readonly marginLeft?: Emu;
+  readonly indent?: Emu;
 }
 
 /**

@@ -6,9 +6,12 @@ import type {
   Picture,
   Shape,
   ShapeConnection,
+  ShapeStyle,
   ShapeTreeNode,
+  StyleMatrixReference,
 } from '@pptx2html/presentation';
 
+import { parseChildColor } from '../drawingml/color.js';
 import { type MediaResolver } from '../drawingml/fill.js';
 import { parseTransform } from '../drawingml/geometry.js';
 import {
@@ -28,12 +31,32 @@ function parseShapeConnection(node: XmlNode | undefined): ShapeConnection | unde
   return { shapeId, connectionSiteIndex };
 }
 
+function parseStyleMatrixReference(node: XmlNode | undefined): StyleMatrixReference | undefined {
+  if (!node) return undefined;
+  const index = Number.parseInt(attr(node, 'idx') ?? '', 10);
+  const color = parseChildColor(node);
+  if (Number.isNaN(index) || !color) return undefined;
+  return { index, color };
+}
+
+/** Parses p:style's fillRef/lnRef (§19.3.1.44) — effectRef/fontRef are unmodeled, see
+ * `ShapeStyle`'s own doc comment. */
+function parseShapeStyle(node: XmlNode | undefined): ShapeStyle | undefined {
+  if (!node) return undefined;
+  const fillRef = parseStyleMatrixReference(findChild(node, 'fillRef'));
+  const lineRef = parseStyleMatrixReference(findChild(node, 'lnRef'));
+  if (!fillRef && !lineRef) return undefined;
+  return { ...(fillRef ? { fillRef } : {}), ...(lineRef ? { lineRef } : {}) };
+}
+
 function parseShape(node: XmlNode, resolveMedia: MediaResolver): Shape {
   const textBody = parseTextBody(findChild(node, 'txBody'), resolveMedia);
+  const style = parseShapeStyle(findChild(node, 'style'));
   return {
     kind: 'shape',
     nonVisual: parseNonVisualDrawingProperties(findChild(node, 'nvSpPr')),
     properties: parseShapeProperties(findChild(node, 'spPr'), resolveMedia),
+    ...(style ? { style } : {}),
     ...(textBody ? { textBody } : {}),
   };
 }
@@ -45,10 +68,12 @@ function parsePicture(node: XmlNode, resolveMedia: MediaResolver): Picture | und
   const image = embed ? resolveMedia(embed) : undefined;
   if (!image) return undefined;
 
+  const style = parseShapeStyle(findChild(node, 'style'));
   return {
     kind: 'picture',
     nonVisual: parseNonVisualDrawingProperties(findChild(node, 'nvPicPr')),
     properties: parseShapeProperties(findChild(node, 'spPr'), resolveMedia),
+    ...(style ? { style } : {}),
     image,
   };
 }
@@ -56,10 +81,12 @@ function parsePicture(node: XmlNode, resolveMedia: MediaResolver): Picture | und
 function parseConnectionShape(node: XmlNode, resolveMedia: MediaResolver): ConnectionShape {
   const startConnection = parseShapeConnection(findChild(node, 'stCxn'));
   const endConnection = parseShapeConnection(findChild(node, 'endCxn'));
+  const style = parseShapeStyle(findChild(node, 'style'));
   return {
     kind: 'connector',
     nonVisual: parseNonVisualDrawingProperties(findChild(node, 'nvCxnSpPr')),
     properties: parseShapeProperties(findChild(node, 'spPr'), resolveMedia),
+    ...(style ? { style } : {}),
     ...(startConnection ? { startConnection } : {}),
     ...(endConnection ? { endConnection } : {}),
   };

@@ -1,4 +1,5 @@
 export * from './common-slide-data.js';
+export * from './shape-style.js';
 export * from './shape-tree.js';
 export * from './table.js';
 export * from './slide-master.js';

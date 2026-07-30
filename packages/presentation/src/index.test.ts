@@ -23,7 +23,7 @@ const theme: Theme = {
     majorFont: { latin: 'Calibri Light' },
     minorFont: { latin: 'Calibri' },
   },
-  formatScheme: { name: 'Office' },
+  formatScheme: { name: 'Office', fillStyles: [], lineStyles: [] },
 };
 
 const master: SlideMaster = {

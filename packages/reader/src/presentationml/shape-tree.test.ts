@@ -93,4 +93,53 @@ describe('presentationml/shape-tree', () => {
     );
     expect(parseShapeTree(spTree!, noMedia)).toEqual([]);
   });
+
+  it("parses a shape's p:style fillRef/lnRef (PowerPoint's Shape Styles gallery, no explicit spPr fill/line)", () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a">
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="2" name="Oval 1"/></p:nvSpPr>
+          <p:spPr><a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom></p:spPr>
+          <p:style>
+            <a:lnRef idx="2"><a:schemeClr val="accent1"><a:shade val="15000"/></a:schemeClr></a:lnRef>
+            <a:fillRef idx="1"><a:schemeClr val="accent1"/></a:fillRef>
+            <a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef>
+            <a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef>
+          </p:style>
+        </p:sp>
+      </p:spTree>`,
+    );
+    const [shape] = parseShapeTree(spTree!, noMedia);
+    expect(shape).toMatchObject({
+      style: {
+        fillRef: { index: 1, color: { type: 'scheme', value: 'accent1' } },
+        lineRef: {
+          index: 2,
+          color: { type: 'scheme', value: 'accent1', transforms: { shade: 15000 } },
+        },
+      },
+    });
+  });
+
+  it('parses a picture/connector p:style, and omits style entirely when absent', () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a" xmlns:r="r">
+        <p:pic>
+          <p:nvPicPr><p:cNvPr id="2" name="Picture 1"/></p:nvPicPr>
+          <p:blipFill><a:blip r:embed="rId1"/></p:blipFill>
+          <p:spPr/>
+          <p:style><a:fillRef idx="3"><a:schemeClr val="accent2"/></a:fillRef></p:style>
+        </p:pic>
+        <p:cxnSp>
+          <p:nvCxnSpPr><p:cNvPr id="3" name="Connector 1"/></p:nvCxnSpPr>
+          <p:spPr/>
+        </p:cxnSp>
+      </p:spTree>`,
+    );
+    const [picture, connector] = parseShapeTree(spTree!, withImage);
+    expect(picture).toMatchObject({
+      style: { fillRef: { index: 3, color: { type: 'scheme', value: 'accent2' } } },
+    });
+    expect(connector).not.toHaveProperty('style');
+  });
 });

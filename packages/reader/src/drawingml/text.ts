@@ -1,7 +1,12 @@
 import type {
+  AutoNumberScheme,
+  Bullet,
+  Color,
+  Emu,
   LineBreak,
   Paragraph,
   ParagraphProperties,
+  Percentage,
   RunProperties,
   TextAlignment,
   TextAnchor,
@@ -17,8 +22,9 @@ import type {
 
 import type { XmlNode } from '../xml/parse.js';
 import { attr, children, findAllChildren, findChild, localName, textOf } from '../xml/query.js';
+import { parseChildColor } from './color.js';
 import { parseChildFill, type MediaResolver } from './fill.js';
-import { parseFontSize, parseIntAttr } from './units.js';
+import { parseEmu, parseFontSize, parseIntAttr, parsePercentage } from './units.js';
 
 const ALIGNMENT_MAP: Record<string, TextAlignment> = {
   l: 'left',
@@ -27,6 +33,19 @@ const ALIGNMENT_MAP: Record<string, TextAlignment> = {
   just: 'justify',
   dist: 'distributed',
 };
+
+const AUTO_NUMBER_SCHEMES: ReadonlySet<string> = new Set<AutoNumberScheme>([
+  'arabicPeriod',
+  'arabicParenR',
+  'alphaLcPeriod',
+  'alphaUcPeriod',
+  'alphaLcParenR',
+  'alphaUcParenR',
+  'romanLcPeriod',
+  'romanUcPeriod',
+  'romanLcParenR',
+  'romanUcParenR',
+]);
 
 function isWrap(value: string | undefined): value is TextWrap {
   return value === 'none' || value === 'square';
@@ -97,18 +116,92 @@ function parseTextField(node: XmlNode, resolveMedia: MediaResolver): TextField {
   };
 }
 
+/** Parses a:buChar/a:buAutoNum's shared glyph overrides (§21.1.2.4.4/4.6/4.9, buFont/buClr/buSzPct). */
+function parseBulletStyle(node: XmlNode): {
+  font?: string;
+  color?: Color;
+  sizePercent?: Percentage;
+} {
+  const buFont = findChild(node, 'buFont');
+  const font = buFont ? attr(buFont, 'typeface') : undefined;
+  const buClr = findChild(node, 'buClr');
+  const color = buClr ? parseChildColor(buClr) : undefined;
+  const buSzPct = findChild(node, 'buSzPct');
+  const sizePercent = buSzPct ? parsePercentage(attr(buSzPct, 'val')) : undefined;
+
+  return {
+    ...(font ? { font } : {}),
+    ...(color ? { color } : {}),
+    ...(sizePercent !== undefined ? { sizePercent } : {}),
+  };
+}
+
+/**
+ * Parses a pPr/lvlNpPr's bullet (§21.1.2.4): `buNone` suppresses one that would otherwise be
+ * inherited, `buChar`/`buAutoNum` are mutually exclusive per the schema. `buSzPts` (a point-size
+ * bullet override, as opposed to `buSzPct`'s percentage) is unmodeled for the skeleton — `buSzPct`
+ * is what real decks overwhelmingly use.
+ */
+function parseBullet(node: XmlNode): Bullet | undefined {
+  if (findChild(node, 'buNone')) return { type: 'none' };
+
+  const buChar = findChild(node, 'buChar');
+  if (buChar) {
+    const char = attr(buChar, 'char');
+    return char ? { type: 'char', char, ...parseBulletStyle(node) } : undefined;
+  }
+
+  const buAutoNum = findChild(node, 'buAutoNum');
+  if (buAutoNum) {
+    const typeValue = attr(buAutoNum, 'type');
+    const scheme: AutoNumberScheme =
+      typeValue && AUTO_NUMBER_SCHEMES.has(typeValue)
+        ? (typeValue as AutoNumberScheme)
+        : 'arabicPeriod';
+    const startAt = parseIntAttr(attr(buAutoNum, 'startAt'));
+    return {
+      type: 'autoNum',
+      scheme,
+      ...(startAt !== undefined ? { startAt } : {}),
+      ...parseBulletStyle(node),
+    };
+  }
+
+  return undefined;
+}
+
+/** Parses the paragraph-properties fields shared by a:pPr and a:lvlNpPr (§21.1.2.2.7/2.4.12). */
+function parseSharedParagraphProperties(node: XmlNode): {
+  alignment?: TextAlignment;
+  bullet?: Bullet;
+  marginLeft?: Emu;
+  indent?: Emu;
+} {
+  const algn = attr(node, 'algn');
+  const alignment = algn ? ALIGNMENT_MAP[algn] : undefined;
+  const bullet = parseBullet(node);
+  const marginLeft = parseEmu(attr(node, 'marL'));
+  const indent = parseEmu(attr(node, 'indent'));
+
+  return {
+    ...(alignment ? { alignment } : {}),
+    ...(bullet ? { bullet } : {}),
+    ...(marginLeft !== undefined ? { marginLeft } : {}),
+    ...(indent !== undefined ? { indent } : {}),
+  };
+}
+
 function parseParagraphProperties(
   node: XmlNode | undefined,
   resolveMedia: MediaResolver,
 ): ParagraphProperties | undefined {
   if (!node) return undefined;
-  const algn = attr(node, 'algn');
-  const alignment = algn ? ALIGNMENT_MAP[algn] : undefined;
+  const shared = parseSharedParagraphProperties(node);
   const level = parseIntAttr(attr(node, 'lvl'));
   const defaultRunProperties = parseRunProperties(findChild(node, 'defRPr'), resolveMedia);
 
   const properties: ParagraphProperties = {
-    ...(alignment ? { alignment } : {}),
+    ...shared,
     ...(level !== undefined ? { level } : {}),
     ...(defaultRunProperties ? { defaultRunProperties } : {}),
   };
@@ -167,12 +260,11 @@ function parseTextListStyleLevel(
   levelNode: XmlNode,
   resolveMedia: MediaResolver,
 ): TextListStyleLevel | undefined {
-  const algn = attr(levelNode, 'algn');
-  const alignment = algn ? ALIGNMENT_MAP[algn] : undefined;
+  const shared = parseSharedParagraphProperties(levelNode);
   const runProperties = parseRunProperties(findChild(levelNode, 'defRPr'), resolveMedia);
 
   const level: TextListStyleLevel = {
-    ...(alignment ? { alignment } : {}),
+    ...shared,
     ...(runProperties ? { runProperties } : {}),
   };
   return Object.keys(level).length > 0 ? level : undefined;
@@ -180,8 +272,8 @@ function parseTextListStyleLevel(
 
 /**
  * Parses a per-level list style (§21.1.2.4.12, a:lstStyle, or the structurally identical
- * p:titleStyle/p:bodyStyle/p:otherStyle/p:defaultTextStyle) — each level's `algn` and `defRPr`,
- * not the other paragraph properties a level can also carry (indent etc., unmodeled for the
+ * p:titleStyle/p:bodyStyle/p:otherStyle/p:defaultTextStyle) — each level's `algn`/bullet/`marL`/
+ * `indent`/`defRPr`, not the other paragraph properties a level can also carry (unmodeled for the
  * skeleton).
  */
 export function parseTextListStyle(

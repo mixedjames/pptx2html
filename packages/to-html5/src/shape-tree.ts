@@ -1,20 +1,64 @@
 import type {
+  ColorScheme,
   ConnectionShape,
+  Emu,
+  Fill,
+  FormatScheme,
   GraphicFrame,
   GroupShape,
+  Line,
   Picture,
   Placeholder,
   Shape,
+  ShapeProperties,
+  ShapeStyle,
   ShapeTreeNode,
   SlideLayout,
   Transform2D,
 } from '@pptx2html/presentation';
 import { type CoordinateMap, composeGroupMap, computeBox } from './coordinate.js';
-import { applyFill, applyLine } from './fill.js';
+import { applyFill, applyLine, applySvgFill, applySvgLine } from './fill.js';
 import { resolveInheritedTransform } from './placeholder.js';
 import type { RenderContext } from './render-context.js';
+import { nativeBorderRadius, presetShapePath } from './shape-geometry.js';
+import { resolveStyleFill, resolveStyleLine } from './style-matrix.js';
 import { renderTable } from './table.js';
 import { renderTextBody } from './text.js';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * Renders a preset geometry's outline (see `shape-geometry.ts`) as an `<svg>` overlay stretched
+ * exactly over the shape's box — `preserveAspectRatio="none"` deliberately distorts the fixed
+ * `0 0 100 100` path non-uniformly onto whatever aspect ratio the shape's actual box has, the same
+ * "everything is a percentage of the box" approach `positionElement` uses for position/size.
+ * `overflow: visible` keeps a thick stroke from being clipped exactly at the box edge (SVG clips
+ * to the viewBox by default, unlike a CSS border which is allowed to sit astride its box edge).
+ */
+function renderShapeOutline(
+  doc: Document,
+  path: string,
+  fill: Fill | undefined,
+  line: Line | undefined,
+  scheme: ColorScheme | undefined,
+  slideWidth: Emu,
+): SVGSVGElement {
+  const svg = doc.createElementNS(SVG_NS, 'svg') as SVGSVGElement;
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.style.position = 'absolute';
+  svg.style.inset = '0';
+  svg.style.width = '100%';
+  svg.style.height = '100%';
+  svg.style.overflow = 'visible';
+
+  const pathEl = doc.createElementNS(SVG_NS, 'path') as SVGPathElement;
+  pathEl.setAttribute('d', path);
+  applySvgFill(pathEl, fill, scheme);
+  applySvgLine(pathEl, line, scheme, slideWidth);
+  svg.appendChild(pathEl);
+  return svg;
+}
 
 /**
  * Positions an element as a percentage of the slide's own size rather than in absolute px, so
@@ -29,6 +73,10 @@ function positionElement(
 ): void {
   const box = computeBox(map, transform);
   element.style.position = 'absolute';
+  // PowerPoint sizes a shape's outline (see fill.ts's applyLine) within its bounding box rather
+  // than growing the box by the border's width — CSS's default content-box would otherwise make
+  // a bordered shape render larger than its width/height say.
+  element.style.boxSizing = 'border-box';
   element.style.left = `${(box.left / context.slideSize.width) * 100}%`;
   element.style.top = `${(box.top / context.slideSize.height) * 100}%`;
   element.style.width = `${(box.width / context.slideSize.width) * 100}%`;
@@ -56,6 +104,31 @@ function effectiveTransform(
   return undefined;
 }
 
+/**
+ * A shape/picture/connector's own `spPr` fill if it has one, otherwise its `p:style/fillRef`
+ * resolved against the theme's format-scheme style matrix (§20.1.4.2.10, see `style-matrix.ts`) —
+ * PowerPoint's Shape Styles gallery writes shapes with a bare style reference and no explicit
+ * `spPr` fill/line at all, so without this fallback such a shape renders with no fill whatsoever.
+ * A whole-value fallback, not a field-level merge — the same "first defined wins outright"
+ * simplification `background.ts`'s `resolveEffectiveBackground` already uses.
+ */
+function effectiveFill(
+  properties: ShapeProperties,
+  style: ShapeStyle | undefined,
+  formatScheme: FormatScheme | undefined,
+): Fill | undefined {
+  return properties.fill ?? resolveStyleFill(style?.fillRef, formatScheme);
+}
+
+/** `effectiveFill`'s `p:style/lnRef` equivalent. */
+function effectiveLine(
+  properties: ShapeProperties,
+  style: ShapeStyle | undefined,
+  formatScheme: FormatScheme | undefined,
+): Line | undefined {
+  return properties.line ?? resolveStyleLine(style?.lineRef, formatScheme);
+}
+
 function renderShape(
   doc: Document,
   shape: Shape,
@@ -71,8 +144,21 @@ function renderShape(
   );
   if (transform) positionElement(el, map, transform, context);
   const scheme = context.layout?.master.theme.colorScheme;
-  applyFill(el, shape.properties.fill, scheme);
-  applyLine(el, shape.properties.line, scheme, context.slideSize.width);
+  const formatScheme = context.layout?.master.theme.formatScheme;
+  const fill = effectiveFill(shape.properties, shape.style, formatScheme);
+  const line = effectiveLine(shape.properties, shape.style, formatScheme);
+  const geometry = shape.properties.geometry;
+  const outlinePath = geometry && presetShapePath(geometry);
+  if (outlinePath) {
+    el.appendChild(
+      renderShapeOutline(doc, outlinePath, fill, line, scheme, context.slideSize.width),
+    );
+  } else {
+    const radius = geometry && nativeBorderRadius(geometry);
+    if (radius) el.style.borderRadius = radius;
+    applyFill(el, fill, scheme);
+    applyLine(el, line, scheme, context.slideSize.width);
+  }
   if (shape.textBody) {
     el.appendChild(renderTextBody(doc, shape.textBody, shape.nonVisual.placeholder, context));
   }
@@ -94,11 +180,20 @@ function renderPicture(
   );
   if (transform) positionElement(el, map, transform, context);
   const scheme = context.layout?.master.theme.colorScheme;
+  const formatScheme = context.layout?.master.theme.formatScheme;
+  const fill = effectiveFill(picture.properties, picture.style, formatScheme);
+  const line = effectiveLine(picture.properties, picture.style, formatScheme);
+  // Unlike renderShape, a non-rect/roundRect/ellipse preset (e.g. a triangle-cropped picture) is
+  // not yet handled here — clipping an <img> to an arbitrary SVG path needs an <svg><image> +
+  // <clipPath> overlay, not the plain border-radius this native subset gets for free; deliberately
+  // deferred (rect/roundRect/ellipse covers the overwhelming majority of real picture crops).
+  const radius = picture.properties.geometry && nativeBorderRadius(picture.properties.geometry);
+  if (radius) el.style.borderRadius = radius;
   // Shows through any transparent pixels in the image itself (e.g. a transparent PNG over a
   // colored spPr fill) — same fill/line properties a shape carries, since Picture shares
   // ShapeProperties.
-  applyFill(el, picture.properties.fill, scheme);
-  applyLine(el, picture.properties.line, scheme, context.slideSize.width);
+  applyFill(el, fill, scheme);
+  applyLine(el, line, scheme, context.slideSize.width);
   const blob = new Blob([new Uint8Array(picture.image.data)], { type: picture.image.contentType });
   el.src = URL.createObjectURL(blob);
   return el;

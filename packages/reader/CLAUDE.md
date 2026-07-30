@@ -15,13 +15,19 @@ const presentation = readPresentation(uint8ArrayOfPptxBytes);
 Full read path is implemented end-to-end — themes, slide masters/layouts/slides,
 notes, tables, and the whole shape tree (shapes/pictures/connectors/graphic
 frames/groups) with all drawingml primitives (color, fill, line, geometry, text),
-including the full text-property inheritance surface: a paragraph's own `algn`/`defRPr`,
-a shape's `txBody/lstStyle`, a slide master's `txStyles` (title/body/other), and the
-presentation's own `defaultTextStyle` are all parsed by `drawingml/text.ts`'s
-`parseTextListStyle` (shared across all four, since they're structurally identical —
-§21.1.2.4.12's `lvl1pPr`..`lvl9pPr`; each level's `algn` and `defRPr` become a
-`TextListStyleLevel`'s `alignment`/`runProperties`). `tsc -b`, `eslint`, `vitest run`
-(whole repo) and `prettier --check` all pass as of this writing.
+including the full text-property inheritance surface: a paragraph's own `algn`/bullet
+(`buNone`/`buChar`/`buAutoNum`)/`marL`/`indent`/`defRPr`, a shape's `txBody/lstStyle`,
+a slide master's `txStyles` (title/body/other), and the presentation's own
+`defaultTextStyle` are all parsed by `drawingml/text.ts`'s `parseTextListStyle`
+(shared across all four, since they're structurally identical — §21.1.2.4.12's
+`lvl1pPr`..`lvl9pPr`) and its own `parseSharedParagraphProperties` helper (shared in turn
+with `a:pPr` parsing, since a `lvlNpPr` is itself structurally a full paragraph-properties
+element). A theme's `fmtScheme` fill/line style matrices (`fillStyleLst`/`lnStyleLst`) are
+parsed too (`theme.ts`, reusing `drawingml/fill.ts`'s/`line.ts`'s own parsers), along with a
+shape/picture/connector's `p:style` `fillRef`/`lnRef` (`presentationml/shape-tree.ts`'s
+`parseShapeStyle`) — together these resolve the fill/line PowerPoint's Shape Styles gallery
+writes by default (a bare style reference, no explicit `spPr` fill/line at all). `tsc -b`,
+`eslint`, `vitest run` (whole repo) and `prettier --check` all pass as of this writing.
 
 ## Layout (mirrors `packages/presentation/src`'s own file layout 1:1)
 
@@ -44,7 +50,16 @@ presentation's own `defaultTextStyle` are all parsed by `drawingml/text.ts`'s
   does **not** resolve placeholder inheritance (matching a slide placeholder to
   its layout/master counterpart to find an inherited transform); that's
   `@pptx2html/to-html5`'s job, since it needs the sibling layout/master shapes to
-  do it (see that package's `placeholder.ts`).
+  do it (see that package's `placeholder.ts`). `theme.ts`'s `parseFormatScheme`
+  parses `fmtScheme`'s `fillStyleLst`/`lnStyleLst` by reusing `drawingml/fill.ts`'s
+  `parseFill`/`drawingml/line.ts`'s `parseLine` directly (a style-matrix entry is
+  structurally identical to a shape's own `spPr` fill/line) — against a no-op
+  `MediaResolver`, since a theme's style matrix referencing an image fill is
+  vanishingly rare and not worth plumbing the theme part's own relationships through
+  for. `presentationml/shape-tree.ts`'s `parseShapeStyle` parses a shape/picture/
+  connector's own `p:style` `fillRef`/`lnRef` (§19.3.1.44) the same way it resolves any
+  other child colour — `effectRef`/`fontRef` are skipped, unparsed, matching
+  `ShapeStyle`'s own scope in `packages/presentation`.
 - `reader-context.ts` — `ReaderContext`, threaded through every parser: the
   `OpcPackage` plus part-name-keyed caches (`themes`, `slideMasters`,
   `slideLayouts`, `notesMasters`, `slides`, `media`) so a part referenced from
@@ -68,9 +83,9 @@ two-phase order intact.
 
 ## Scope boundary
 
-Anywhere `packages/presentation` says "unmodeled for the skeleton" (custGeom path
-data, chart/smartArt/oleObject internals, table styles, bullet/numbering, format
-scheme detail, theme overrides, custom shows, path gradients), the reader simply
+Anywhere `packages/presentation` says "unmodeled" (custGeom path data, chart/smartArt/
+oleObject internals, table style matrices, `effectStyleLst`/`bgFillStyleLst`, `p:style`'s
+`effectRef`/`fontRef`, theme overrides, custom shows, path gradients), the reader simply
 never reads that XML — it doesn't parse-then-discard. Don't add handling for these
 without first updating the corresponding type in `packages/presentation`.
 

@@ -89,6 +89,69 @@ describe('drawingml/text', () => {
     expect(paragraph.properties?.defaultRunProperties).toEqual({ bold: true, fontSize: 2400 });
   });
 
+  it('parses a buChar bullet with its font/colour/size and marL/indent', () => {
+    const node = firstNode(
+      `<p:txBody xmlns:p="p" xmlns:a="a">
+        <a:p>
+          <a:pPr marL="457200" indent="-457200">
+            <a:buFont typeface="Arial"/>
+            <a:buClr><a:srgbClr val="FF0000"/></a:buClr>
+            <a:buSzPct val="80000"/>
+            <a:buChar char="•"/>
+          </a:pPr>
+          <a:r><a:t>Item</a:t></a:r>
+        </a:p>
+      </p:txBody>`,
+    );
+
+    const properties = parseTextBody(node, noMedia)!.paragraphs[0]!.properties;
+    expect(properties?.marginLeft).toBe(457200);
+    expect(properties?.indent).toBe(-457200);
+    expect(properties?.bullet).toEqual({
+      type: 'char',
+      char: '•',
+      font: 'Arial',
+      color: { type: 'srgb', value: 'FF0000' },
+      sizePercent: 80000,
+    });
+  });
+
+  it('parses a buAutoNum bullet with its scheme and startAt', () => {
+    const node = firstNode(
+      `<p:txBody xmlns:p="p" xmlns:a="a">
+        <a:p>
+          <a:pPr><a:buAutoNum type="arabicParenR" startAt="3"/></a:pPr>
+          <a:r><a:t>Item</a:t></a:r>
+        </a:p>
+      </p:txBody>`,
+    );
+
+    const bullet = parseTextBody(node, noMedia)!.paragraphs[0]!.properties?.bullet;
+    expect(bullet).toEqual({ type: 'autoNum', scheme: 'arabicParenR', startAt: 3 });
+  });
+
+  it('falls back to arabicPeriod for an unrecognized buAutoNum type', () => {
+    const node = firstNode(
+      `<p:txBody xmlns:p="p" xmlns:a="a">
+        <a:p><a:pPr><a:buAutoNum type="bogusScheme"/></a:pPr><a:r><a:t>Item</a:t></a:r></a:p>
+      </p:txBody>`,
+    );
+
+    const bullet = parseTextBody(node, noMedia)!.paragraphs[0]!.properties?.bullet;
+    expect(bullet).toEqual({ type: 'autoNum', scheme: 'arabicPeriod' });
+  });
+
+  it('parses buNone as an explicit no-bullet', () => {
+    const node = firstNode(
+      `<p:txBody xmlns:p="p" xmlns:a="a">
+        <a:p><a:pPr><a:buNone/></a:pPr><a:r><a:t>Item</a:t></a:r></a:p>
+      </p:txBody>`,
+    );
+
+    const bullet = parseTextBody(node, noMedia)!.paragraphs[0]!.properties?.bullet;
+    expect(bullet).toEqual({ type: 'none' });
+  });
+
   it('parses a shape-level lstStyle as TextBody.listStyle', () => {
     const node = firstNode(
       `<p:txBody xmlns:p="p" xmlns:a="a">
@@ -131,6 +194,20 @@ describe('parseTextListStyle', () => {
   it('parses a level with only an algn and no defRPr', () => {
     const node = firstNode(`<a:lstStyle xmlns:a="a"><a:lvl1pPr algn="r"/></a:lstStyle>`);
     expect(parseTextListStyle(node, noMedia)?.levels[0]).toEqual({ alignment: 'right' });
+  });
+
+  it('parses a level with a bullet and marL/indent', () => {
+    const node = firstNode(
+      `<a:lstStyle xmlns:a="a">
+        <a:lvl1pPr marL="228600" indent="-228600"><a:buChar char="-"/></a:lvl1pPr>
+      </a:lstStyle>`,
+    );
+
+    expect(parseTextListStyle(node, noMedia)?.levels[0]).toEqual({
+      marginLeft: 228600,
+      indent: -228600,
+      bullet: { type: 'char', char: '-' },
+    });
   });
 
   it('returns undefined when no level carries an algn or defRPr', () => {

@@ -5,6 +5,7 @@ import type {
   TextBody,
   Transform2D,
 } from '../drawingml/index.js';
+import type { ShapeStyle } from './shape-style.js';
 import type { Table } from './table.js';
 
 /** An autoshape or text box (§19.3.1.43, p:sp). */
@@ -12,6 +13,7 @@ export interface Shape {
   readonly kind: 'shape';
   readonly nonVisual: NonVisualDrawingProperties;
   readonly properties: ShapeProperties;
+  readonly style?: ShapeStyle;
   readonly textBody?: TextBody;
 }
 
@@ -20,6 +22,7 @@ export interface Picture {
   readonly kind: 'picture';
   readonly nonVisual: NonVisualDrawingProperties;
   readonly properties: ShapeProperties;
+  readonly style?: ShapeStyle;
   readonly image: MediaPart;
 }
 
@@ -34,6 +37,7 @@ export interface ConnectionShape {
   readonly kind: 'connector';
   readonly nonVisual: NonVisualDrawingProperties;
   readonly properties: ShapeProperties;
+  readonly style?: ShapeStyle;
   readonly startConnection?: ShapeConnection;
   readonly endConnection?: ShapeConnection;
 }

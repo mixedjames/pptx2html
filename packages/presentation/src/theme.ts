@@ -1,4 +1,4 @@
-import type { Color } from './drawingml/index.js';
+import type { Color, Fill, Line } from './drawingml/index.js';
 
 /** The 12 named colour slots a theme defines (§20.1.6.2, a:clrScheme). */
 export interface ColorScheme {
@@ -31,11 +31,17 @@ export interface FontScheme {
 }
 
 /**
- * §20.1.4.1.19, a:fmtScheme. The fill/line/effect style matrices referenced by a shape's
- * style index are unmodeled for the skeleton.
+ * §20.1.4.1.19, a:fmtScheme. Only the fill and line style matrices (`a:fillStyleLst`/
+ * `a:lnStyleLst`) are modeled, each always exactly 3 entries — the 1-based index a shape's
+ * `p:style/fillRef`/`lnRef` (§20.1.4.2.10/2.12, `ShapeStyle` in `presentationml/shape-style.ts`)
+ * points into. `a:effectStyleLst`/`a:bgFillStyleLst` remain unmodeled: no consumer needs them yet
+ * (no effect rendering, and slide/layout backgrounds are already plain `Fill`s, not a
+ * style-matrix reference).
  */
 export interface FormatScheme {
   readonly name: string;
+  readonly fillStyles: readonly Fill[];
+  readonly lineStyles: readonly Line[];
 }
 
 /** A theme part (§14.2.7, theme1.xml). */

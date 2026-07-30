@@ -1,4 +1,6 @@
 import type {
+  Bullet,
+  Emu,
   FontScheme,
   Paragraph,
   Placeholder,
@@ -131,6 +133,25 @@ export function resolveEffectiveRunProperties(
 }
 
 /**
+ * Resolves a single scalar field (as opposed to `RunProperties`' field-by-field merge) by taking
+ * `own` if defined, otherwise the closest-defined value found walking `chain` low to high
+ * priority. Used for `alignment`, `bullet`, `marginLeft` and `indent` — each is one paragraph-level
+ * value, not a set of independent properties, so "first (highest-priority) defined wins" is the
+ * right merge, not a field-by-field combination.
+ */
+function resolveScalar<T>(
+  own: T | undefined,
+  chain: readonly (TextListStyleLevel | undefined)[],
+  pick: (level: TextListStyleLevel) => T | undefined,
+): T | undefined {
+  if (own !== undefined) return own;
+  return chain.reduce<T | undefined>(
+    (inherited, entry) => (entry ? (pick(entry) ?? inherited) : inherited),
+    undefined,
+  );
+}
+
+/**
  * Resolves a paragraph's effective alignment: its own explicit `alignment` if it has one,
  * otherwise the closest-defined one found walking `levelChain` (same chain
  * `resolveEffectiveRunProperties` uses, but "first defined wins" rather than merged field-by-field
@@ -142,12 +163,44 @@ export function resolveEffectiveAlignment(
   placeholder: Placeholder | undefined,
   context: RenderContext,
 ): TextAlignment | undefined {
-  if (paragraph.properties?.alignment) return paragraph.properties.alignment;
   const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
-  return chain.reduce<TextAlignment | undefined>(
-    (inherited, entry) => entry?.alignment ?? inherited,
-    undefined,
-  );
+  return resolveScalar(paragraph.properties?.alignment, chain, (level) => level.alignment);
+}
+
+/**
+ * Resolves a paragraph's effective bullet (§21.1.2.4): its own if set (including an explicit
+ * `{ type: 'none' }` to suppress an inherited one), otherwise the closest-defined one walking
+ * `levelChain`. Not merged field-by-field with a lower level's bullet — a `CharBullet` and an
+ * `AutoNumberBullet` are different shapes entirely, so "closest whole bullet wins" is the only
+ * sensible rule.
+ */
+export function resolveEffectiveBullet(
+  paragraph: Paragraph,
+  shapeTextBody: TextBody,
+  placeholder: Placeholder | undefined,
+  context: RenderContext,
+): Bullet | undefined {
+  const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
+  return resolveScalar(paragraph.properties?.bullet, chain, (level) => level.bullet);
+}
+
+/**
+ * Resolves a paragraph's effective indentation (§21.1.2.2.7's `marL`/`indent`): `marginLeft` is
+ * the whole paragraph's left margin, `indent` is the first line's offset relative to it
+ * (typically negative, hanging a bullet/number ahead of the first line's own text). Each resolved
+ * independently via `resolveScalar`, same chain as alignment/bullet.
+ */
+export function resolveEffectiveIndent(
+  paragraph: Paragraph,
+  shapeTextBody: TextBody,
+  placeholder: Placeholder | undefined,
+  context: RenderContext,
+): { marginLeft: Emu | undefined; indent: Emu | undefined } {
+  const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
+  return {
+    marginLeft: resolveScalar(paragraph.properties?.marginLeft, chain, (level) => level.marginLeft),
+    indent: resolveScalar(paragraph.properties?.indent, chain, (level) => level.indent),
+  };
 }
 
 const THEME_FONT_TOKENS: Record<

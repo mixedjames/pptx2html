@@ -13,7 +13,10 @@ byte streams into it end-to-end (see `packages/reader/CLAUDE.md`), and
 `@pptx2html/to-html5` renders the result into a laid-out, responsively-scaled HTML5 DOM
 with several formatting passes done (font inheritance including alignment — typeface/
 size/bold/italic/underline/strike/color/alignment, all resolved through the full
-placeholder/master/theme chain; shape/picture fill/line; slide background). Table cell
+placeholder/master/theme chain; shape/picture fill/line, including PowerPoint's Shape
+Styles gallery `p:style` fillRef/lnRef fallback via `FormatScheme.fillStyles`/`.lineStyles`
+— see "shape-style.ts" below; a common subset of preset shape geometry; slide background;
+bulleted and numbered lists, including auto-numbering schemes and indentation). Table cell
 fill and table styles are the main remaining gap — see `packages/to-html5/CLAUDE.md`.
 `tsc -b`, `eslint`, `vitest run` and `prettier --check` are all green.
 
@@ -45,9 +48,17 @@ package itself has no construction helpers; it only declares the shape.
   `shape-common.ts` (`NonVisualDrawingProperties` — including `Placeholder`
   type/index, used to resolve a placeholder shape's inherited position/size when
   it has none of its own — and `ShapeProperties`).
-- `theme.ts` — `ColorScheme` (12 named slots), `FontScheme`, `FormatScheme`.
+- `theme.ts` — `ColorScheme` (12 named slots), `FontScheme`, `FormatScheme` (`name` plus
+  `fillStyles`/`lineStyles`, each always 3 entries — the fill/line style matrices a shape's
+  `p:style/fillRef`/`lnRef` points into by 1-based index, reusing `Fill`/`Line` directly since a
+  style-matrix entry is structurally identical to a shape's own `spPr` fill/line; `effectStyleLst`/
+  `bgFillStyleLst` remain unmodeled).
 - `presentationml/` — `shape-tree.ts` (`Shape`/`Picture`/`ConnectionShape`/
-  `GraphicFrame`/`GroupShape`, the `ShapeTreeNode` union), `table.ts`,
+  `GraphicFrame`/`GroupShape`, the `ShapeTreeNode` union), `shape-style.ts`
+  (`ShapeStyle`/`StyleMatrixReference` — a shape/picture/connector's optional `p:style`
+  `fillRef`/`lnRef`, each a 1-based index into `FormatScheme.fillStyles`/`.lineStyles` plus a
+  `Color` that substitutes for that style's `phClr` placeholder; resolving the substitution is
+  `to-html5`'s job, see that package's `style-matrix.ts`), `table.ts`,
   `common-slide-data.ts` (`CommonSlideData`/`Background`, shared by every
   slide-like part), then the part hierarchy: `slide-master.ts` → `slide-layout.ts`
   → `slide.ts` → `notes.ts`, and `presentation.ts` as the DOM root.
@@ -63,22 +74,35 @@ Each gap below is called out with a `§`-referenced comment at its point in the
 code (search for "unmodeled for the skeleton"):
 
 - Custom geometry path data (`custGeom` in `geometry.ts` carries no path).
-- Table/fill/effect/line style matrices referenced by a shape's style index
-  (`FormatScheme` is a bare name).
+- Effect and table style matrices referenced by a shape's/table's style index. `FormatScheme`'s
+  fill/line style matrices (`fillStyleLst`/`lnStyleLst`) _are_ modeled and consumed (see
+  `theme.ts`/`shape-style.ts` above) — but `effectStyleLst`/`bgFillStyleLst` (shadows and other
+  effects, plus a separate background-fill matrix) and table style matrices (banded rows, header
+  row styling, etc., referenced by a table's own style ID) remain bare/unmodeled.
+- Preset shape geometry (`geometry.ts`'s `PresetGeometry`) is modeled for every preset name (it's
+  just a string + optional adjustment guides) but only a common subset of ~180 `ST_ShapeType`
+  presets is actually turned into a real outline by a consumer — see `to-html5/CLAUDE.md`'s
+  `shape-geometry.ts`.
 - Chart, SmartArt and OLE object internals — `GraphicPlaceholder` in
   `shape-tree.ts` only preserves which of the three it is.
-- Bullet/numbering in paragraph properties.
 - Text autofit in `TextBodyProperties`.
 - Theme overrides at the slide/layout level (color/font map overrides) — `to-html5`'s colour
   resolution assumes the default clrMap (bg1→lt1, tx1→dk1, bg2→lt2, tx2→dk2).
 - Custom shows on the root `Presentation`.
 - Path gradients (only linear-angle gradients are modeled in `GradientFill`).
-- Indent and bullet/numbering in a `TextListStyle` level — each level (`TextListStyleLevel`)
-  models `algn` (as `alignment`) and `defRPr` (as `runProperties`), since that's what
-  `to-html5`'s font/alignment inheritance pass needs, but not the other paragraph properties a
-  real `a:lvlNpPr` can carry. `TextListStyle` (`drawingml/text.ts`) backs `TextBody.listStyle`,
-  `SlideMaster.textStyles` (title/body/other) and `Presentation.defaultTextStyle` alike — see
-  `to-html5/CLAUDE.md`'s font-inheritance design decision for how a consumer walks all three.
+- Bullet/numbering (`Bullet`, `AutoNumberScheme` in `drawingml/text.ts`) covers `buNone`/
+  `buChar`/`buAutoNum` plus their `buFont`/`buClr`/`buSzPct` overrides, and `marL`/`indent`
+  paragraph indentation — but not `buSzPts` (a point-size bullet override, vs. the modeled
+  `buSzPct` percentage one) or the handful of double-parenthesis `ST_TextAutonumberScheme`
+  variants `AutoNumberScheme` doesn't include (the ten common ones are). Other paragraph-level
+  properties a real `a:pPr`/`a:lvlNpPr` can carry (tab stops, line spacing, space before/after)
+  remain fully unmodeled.
+- Non-bullet/indent/alignment/font paragraph properties in a `TextListStyle` level
+  (`TextListStyleLevel` models `algn`/bullet/`marL`/`indent`/`defRPr` — everything
+  `to-html5`'s paragraph-level inheritance pass needs — but not tab stops, line spacing, etc.).
+  `TextListStyle` (`drawingml/text.ts`) backs `TextBody.listStyle`, `SlideMaster.textStyles`
+  (title/body/other) and `Presentation.defaultTextStyle` alike — see `to-html5/CLAUDE.md`'s
+  font-inheritance design decision for how a consumer walks all three.
 
 **Rule for extending this**: if the reader needs to surface one of these, add the
 type here first, then implement the parser in `packages/reader`. Don't let the
@@ -88,11 +112,16 @@ avoiding.
 
 ## Next likely steps
 
-1. Font/alignment inheritance, shape fill/line, and slide background are all done. Table cell
-   fill is the next thing `@pptx2html/to-html5` needs to render — `TableCell.fill` already
-   exists here and `reader` already parses it, `to-html5`'s `table.ts` just doesn't apply it yet
-   (see that package's CLAUDE.md). Table _style matrices_ referenced by a table's style ID
-   (banded rows, header row styling, etc.) are a separate, unmodeled gap — see `FormatScheme`
+1. Font/alignment inheritance, shape fill/line (including the `p:style` fillRef/lnRef fallback),
+   preset shape geometry (a common subset), slide background, and bulleted/numbered lists are all
+   done. Table cell fill is the next thing `@pptx2html/to-html5` needs to render — `TableCell.fill`
+   already exists here and `reader` already parses it, `to-html5`'s `table.ts` just doesn't apply
+   it yet (see that package's CLAUDE.md). Table _style matrices_ referenced by a table's style ID
+   (banded rows, header row styling, etc.) are a separate, unmodeled gap — see the scope boundary
    above.
-2. Custom geometry path data and bullet/numbering are the two remaining layout
-   (not just formatting) gaps most likely to visibly matter.
+2. Custom geometry path data is the remaining layout (not just formatting) gap most likely to
+   visibly matter next.
+3. Widening `to-html5`'s preset-geometry coverage beyond its current common subset (see that
+   package's CLAUDE.md) doesn't need anything new here — `PresetGeometry` already carries every
+   preset name and any literal `val N` adjustment guide, a consumer just needs to turn more of
+   them into real outlines.

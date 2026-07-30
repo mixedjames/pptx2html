@@ -2,6 +2,7 @@ import type { Presentation } from '@pptx2html/presentation';
 import { PptxPresentationElement, definePresentationElement } from './presentation-element.js';
 
 export { resolveEffectiveBackground } from './background.js';
+export { formatAutoNumber, NumberingState } from './bullet.js';
 export { resolveColor, resolveFillColor } from './color.js';
 export { IDENTITY_MAP, composeGroupMap, computeBox, mapPoint, mapSize } from './coordinate.js';
 export type { CoordinateMap, ElementBox } from './coordinate.js';
@@ -13,8 +14,14 @@ export { renderShapeTreeNode } from './shape-tree.js';
 export { renderSlide } from './slide.js';
 export { renderTable } from './table.js';
 export { renderTextBody } from './text.js';
-export { resolveEffectiveRunProperties, resolveTypeface } from './text-style.js';
-export { EMU_PER_PX, emuToPx } from './units.js';
+export {
+  resolveEffectiveAlignment,
+  resolveEffectiveBullet,
+  resolveEffectiveIndent,
+  resolveEffectiveRunProperties,
+  resolveTypeface,
+} from './text-style.js';
+export { EMU_PER_PT, EMU_PER_PX, emuToCqw, emuToPx, fontSizeToEmu } from './units.js';
 
 /**
  * Renders a presentation object graph into a `<pptx-presentation>` custom element with a shadow

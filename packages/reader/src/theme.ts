@@ -1,16 +1,20 @@
 import type {
   Color,
   ColorScheme,
+  Fill,
   FontCollection,
   FontScheme,
   FormatScheme,
+  Line,
   Theme,
 } from '@pptx2html/presentation';
 
 import { parseChildColor } from './drawingml/color.js';
+import { parseFill, type MediaResolver } from './drawingml/fill.js';
+import { parseLine } from './drawingml/line.js';
 import type { XmlNode } from './xml/parse.js';
 import { parseXml } from './xml/parse.js';
-import { attr, findChild, findRoot } from './xml/query.js';
+import { attr, children, findChild, findRoot, localName } from './xml/query.js';
 
 const COLOR_SCHEME_SLOTS = [
   'dk1',
@@ -61,8 +65,34 @@ function parseFontScheme(node: XmlNode | undefined): FontScheme {
   };
 }
 
+/** A theme's fillStyleLst/lnStyleLst entries never reference media (§20.1.4.1.19) — blipFill is
+ * legal there in principle but vanishingly rare, so a no-op resolver is used rather than plumbing
+ * the theme part's own relationships through just for this. */
+const NO_MEDIA: MediaResolver = () => undefined;
+
+function parseFillStyleList(node: XmlNode | undefined): readonly Fill[] {
+  if (!node) return [];
+  const fills: Fill[] = [];
+  for (const child of children(node)) {
+    const fill = parseFill(child, NO_MEDIA);
+    if (fill) fills.push(fill);
+  }
+  return fills;
+}
+
+function parseLineStyleList(node: XmlNode | undefined): readonly Line[] {
+  if (!node) return [];
+  return children(node)
+    .filter((child) => localName(child) === 'ln')
+    .map((child) => parseLine(child, NO_MEDIA));
+}
+
 function parseFormatScheme(node: XmlNode | undefined): FormatScheme {
-  return { name: (node && attr(node, 'name')) || '' };
+  return {
+    name: (node && attr(node, 'name')) || '',
+    fillStyles: parseFillStyleList(node && findChild(node, 'fillStyleLst')),
+    lineStyles: parseLineStyleList(node && findChild(node, 'lnStyleLst')),
+  };
 }
 
 /** Parses a theme part, e.g. ppt/theme/theme1.xml (§14.2.7, a:theme). */

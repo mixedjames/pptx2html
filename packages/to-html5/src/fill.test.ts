@@ -1,7 +1,12 @@
 // @vitest-environment happy-dom
 import type { ColorScheme, Fill, GradientFill, Line } from '@pptx2html/presentation';
 import { describe, expect, it } from 'vitest';
-import { applyFill, applyLine, resolveGradientCss } from './fill.js';
+import { applyFill, applyLine, applySvgFill, applySvgLine, resolveGradientCss } from './fill.js';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+function svgPath(): SVGPathElement {
+  return document.createElementNS(SVG_NS, 'path') as SVGPathElement;
+}
 
 const SCHEME: ColorScheme = {
   name: 'Office',
@@ -170,5 +175,80 @@ describe('applyLine', () => {
     const el = document.createElement('div');
     applyLine(el, undefined, undefined, SLIDE_WIDTH);
     expect(el.style.cssText).toBe('');
+  });
+});
+
+describe('applySvgFill', () => {
+  it('sets fill for a solid fill', () => {
+    const path = svgPath();
+    applySvgFill(path, { type: 'solid', color: { type: 'srgb', value: '00FF00' } }, undefined);
+    expect(path.style.fill).toBe('rgb(0, 255, 0)');
+  });
+
+  it('leaves fill none for a gradient fill (no cheap SVG equivalent for an arbitrary path)', () => {
+    const path = svgPath();
+    const fill: Fill = {
+      type: 'gradient',
+      stops: [
+        { position: 0, color: { type: 'srgb', value: 'FF0000' } },
+        { position: 100000, color: { type: 'srgb', value: '0000FF' } },
+      ],
+    };
+    applySvgFill(path, fill, undefined);
+    expect(path.style.fill).toBe('none');
+  });
+
+  it('leaves fill none for an explicit noFill', () => {
+    const path = svgPath();
+    applySvgFill(path, { type: 'none' }, undefined);
+    expect(path.style.fill).toBe('none');
+  });
+
+  it('leaves fill none when fill is undefined', () => {
+    const path = svgPath();
+    applySvgFill(path, undefined, undefined);
+    expect(path.style.fill).toBe('none');
+  });
+});
+
+describe('applySvgLine', () => {
+  const SLIDE_WIDTH = 9144000;
+
+  // NOTE: same happy-dom/cqw gap as applyLine's own NOTE above — applySvgLine sets
+  // stroke-width in cqw, which happy-dom's CSSOM silently drops, so the tests below don't
+  // assert on it.
+
+  it('sets stroke color for a solid line', () => {
+    const path = svgPath();
+    const line: Line = {
+      width: 12700,
+      fill: { type: 'solid', color: { type: 'srgb', value: 'FF0000' } },
+    };
+    applySvgLine(path, line, undefined, SLIDE_WIDTH);
+    expect(path.style.stroke).toBe('rgb(255, 0, 0)');
+  });
+
+  it('falls back to currentColor when the line has no fill of its own', () => {
+    const path = svgPath();
+    applySvgLine(path, { width: 12700 }, undefined, SLIDE_WIDTH);
+    expect(path.style.stroke).toBe('currentColor');
+  });
+
+  it('sets no stroke for an explicit line noFill', () => {
+    const path = svgPath();
+    applySvgLine(path, { width: 12700, fill: { type: 'none' } }, undefined, SLIDE_WIDTH);
+    expect(path.style.stroke).toBe('none');
+  });
+
+  it('sets no stroke when line is undefined', () => {
+    const path = svgPath();
+    applySvgLine(path, undefined, undefined, SLIDE_WIDTH);
+    expect(path.style.stroke).toBe('none');
+  });
+
+  it('leaves stroke-dasharray unset for a solid dash style', () => {
+    const path = svgPath();
+    applySvgLine(path, { width: 12700, dashStyle: 'solid' }, undefined, SLIDE_WIDTH);
+    expect(path.style.strokeDasharray).toBe('');
   });
 });

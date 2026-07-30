@@ -118,3 +118,55 @@ export function applyLine(
   const color = line.fill ? resolveFillColor(line.fill, scheme) : undefined;
   if (color) el.style.borderColor = color;
 }
+
+/** SVG's own dasharray equivalent of `borderStyleFor`'s three-bucket CSS `border-style`
+ * approximation — expressed as real CSS lengths (not unitless user-space numbers) so it renders
+ * at a consistent screen size regardless of `shape-geometry.ts`'s non-uniformly-stretched
+ * `0 0 100 100` viewBox (see `applySvgLine` below). `undefined` renders a solid line (no dashes). */
+function svgDasharrayFor(line: Line): string | undefined {
+  if (line.compound === 'double') return undefined; // no SVG equivalent either; same fallback as borderStyleFor.
+  switch (line.dashStyle) {
+    case undefined:
+    case 'solid':
+      return undefined;
+    case 'dot':
+    case 'sysDot':
+      return '0.25cqw, 0.75cqw';
+    default:
+      return '1cqw, 1cqw';
+  }
+}
+
+/**
+ * SVG-path equivalent of `applyFill`, for the preset shapes `shape-geometry.ts`'s `presetShapePath`
+ * renders as a real outline rather than a rectangle (see `shape-tree.ts`). Only a solid fill
+ * resolves to an SVG `fill` color — gradient/pattern/blip fills have no cheap SVG equivalent for an
+ * arbitrary path the way they do for a rectangular CSS background, so (like `applyLine`'s outline
+ * color) they're left unset rather than approximated with a guessed single color.
+ */
+export function applySvgFill(
+  path: SVGPathElement,
+  fill: Fill | undefined,
+  scheme: ColorScheme | undefined,
+): void {
+  path.style.fill = 'none';
+  if (!fill || fill.type === 'none') return;
+  const color = resolveFillColor(fill, scheme);
+  if (color) path.style.fill = color;
+}
+
+/** SVG-path equivalent of `applyLine`, for the same preset-shape paths `applySvgFill` fills. */
+export function applySvgLine(
+  path: SVGPathElement,
+  line: Line | undefined,
+  scheme: ColorScheme | undefined,
+  slideWidth: Emu,
+): void {
+  path.style.stroke = 'none';
+  if (!line || line.fill?.type === 'none') return;
+  path.style.strokeWidth = emuToCqw(line.width ?? DEFAULT_LINE_WIDTH_EMU, slideWidth);
+  const dasharray = svgDasharrayFor(line);
+  if (dasharray) path.style.strokeDasharray = dasharray;
+  const color = line.fill ? resolveFillColor(line.fill, scheme) : undefined;
+  path.style.stroke = color ?? 'currentColor';
+}

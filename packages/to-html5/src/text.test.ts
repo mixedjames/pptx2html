@@ -118,7 +118,7 @@ describe('renderTextBody', () => {
           majorFont: { latin: 'Calibri Light' },
           minorFont: { latin: 'Calibri' },
         },
-        formatScheme: { name: 'Office' },
+        formatScheme: { name: 'Office', fillStyles: [], lineStyles: [] },
       },
     };
     const layout: SlideLayout = {
@@ -185,5 +185,151 @@ describe('renderTextBody', () => {
 
     const el = renderTextBody(document, textBody, titlePlaceholder, context);
     expect(el.querySelector('p')?.style.textAlign).toBe('center');
+  });
+
+  describe('bullets and numbering', () => {
+    it('renders a char bullet as a span before the paragraph text, styled from its own font/colour', () => {
+      const textBody: TextBody = {
+        paragraphs: [
+          {
+            properties: {
+              bullet: {
+                type: 'char',
+                char: '•',
+                font: 'Arial',
+                color: { type: 'srgb', value: 'FF0000' },
+              },
+            },
+            runs: [{ kind: 'run', text: 'Item' }],
+          },
+        ],
+      };
+
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      const bullet = el.querySelector('span.pptx-bullet') as HTMLElement;
+      expect(bullet.textContent).toBe('•');
+      expect(bullet.style.fontFamily).toBe('Arial');
+      expect(bullet.style.color).toBe('rgb(255, 0, 0)');
+      expect(el.querySelector('p')?.textContent).toBe('• Item');
+    });
+
+    it('numbers consecutive autoNum paragraphs at the same level sequentially', () => {
+      const bullet = { type: 'autoNum' as const, scheme: 'arabicPeriod' as const };
+      const textBody: TextBody = {
+        paragraphs: [
+          { properties: { bullet }, runs: [{ kind: 'run', text: 'One' }] },
+          { properties: { bullet }, runs: [{ kind: 'run', text: 'Two' }] },
+          { properties: { bullet }, runs: [{ kind: 'run', text: 'Three' }] },
+        ],
+      };
+
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      const labels = [...el.querySelectorAll('span.pptx-bullet')].map((b) => b.textContent);
+      expect(labels).toEqual(['1.', '2.', '3.']);
+    });
+
+    it('restarts numbering for a nested sub-list and resumes the outer count after', () => {
+      const outer = { type: 'autoNum' as const, scheme: 'arabicPeriod' as const };
+      const inner = { type: 'autoNum' as const, scheme: 'romanLcPeriod' as const };
+      const textBody: TextBody = {
+        paragraphs: [
+          { properties: { bullet: outer }, runs: [{ kind: 'run', text: 'A' }] },
+          { properties: { level: 1, bullet: inner }, runs: [{ kind: 'run', text: 'A-i' }] },
+          { properties: { level: 1, bullet: inner }, runs: [{ kind: 'run', text: 'A-ii' }] },
+          { properties: { bullet: outer }, runs: [{ kind: 'run', text: 'B' }] },
+          { properties: { level: 1, bullet: inner }, runs: [{ kind: 'run', text: 'B-i' }] },
+        ],
+      };
+
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      const labels = [...el.querySelectorAll('span.pptx-bullet')].map((b) => b.textContent);
+      expect(labels).toEqual(['1.', 'i.', 'ii.', '2.', 'i.']);
+    });
+
+    it('an explicit buNone suppresses a bullet inherited from the shape list style', () => {
+      const shapeTextBody: TextBody = {
+        listStyle: { levels: [{ bullet: { type: 'char', char: '-' } }] },
+        paragraphs: [
+          { runs: [{ kind: 'run', text: 'Bulleted' }] },
+          {
+            properties: { bullet: { type: 'none' } },
+            runs: [{ kind: 'run', text: 'Not bulleted' }],
+          },
+        ],
+      };
+
+      const el = renderTextBody(document, shapeTextBody, undefined, BARE_CONTEXT);
+      const paragraphs = el.querySelectorAll('p');
+      expect(paragraphs[0]?.querySelector('span.pptx-bullet')?.textContent).toBe('-');
+      expect(paragraphs[1]?.querySelector('span.pptx-bullet')).toBeNull();
+    });
+
+    it("falls back to the paragraph's ambient run colour when the bullet has none of its own", () => {
+      const textBody: TextBody = {
+        paragraphs: [
+          {
+            properties: {
+              bullet: { type: 'char', char: '•' },
+              defaultRunProperties: {
+                fill: { type: 'solid', color: { type: 'srgb', value: '00FF00' } },
+              },
+            },
+            runs: [{ kind: 'run', text: 'Item' }],
+          },
+        ],
+      };
+
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      const bullet = el.querySelector('span.pptx-bullet') as HTMLElement;
+      expect(bullet.style.color).toBe('rgb(0, 255, 0)');
+    });
+
+    it('renders no bullet span when a paragraph has none', () => {
+      const textBody: TextBody = { paragraphs: [{ runs: [{ kind: 'run', text: 'Plain' }] }] };
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      expect(el.querySelector('span.pptx-bullet')).toBeNull();
+    });
+
+    it('renders no bullet for a trailing empty paragraph, even with an inherited char bullet', () => {
+      const shapeTextBody: TextBody = {
+        listStyle: { levels: [{ bullet: { type: 'char', char: '•' } }] },
+        paragraphs: [{ runs: [{ kind: 'run', text: 'Item' }] }, { runs: [] }],
+      };
+
+      const el = renderTextBody(document, shapeTextBody, undefined, BARE_CONTEXT);
+      const paragraphs = el.querySelectorAll('p');
+      expect(paragraphs[0]?.querySelector('span.pptx-bullet')?.textContent).toBe('•');
+      expect(paragraphs[1]?.querySelector('span.pptx-bullet')).toBeNull();
+      expect(paragraphs[1]?.querySelector('br')).not.toBeNull();
+    });
+
+    it('does not consume a number for a trailing empty paragraph', () => {
+      const bullet = { type: 'autoNum' as const, scheme: 'arabicPeriod' as const };
+      const textBody: TextBody = {
+        paragraphs: [
+          { properties: { bullet }, runs: [{ kind: 'run', text: 'One' }] },
+          { properties: { bullet }, runs: [] },
+        ],
+      };
+
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      const labels = [...el.querySelectorAll('span.pptx-bullet')].map((b) => b.textContent);
+      expect(labels).toEqual(['1.']);
+    });
+
+    it('a blank line between two autoNum paragraphs does not break the running count', () => {
+      const bullet = { type: 'autoNum' as const, scheme: 'arabicPeriod' as const };
+      const textBody: TextBody = {
+        paragraphs: [
+          { properties: { bullet }, runs: [{ kind: 'run', text: 'One' }] },
+          { runs: [] },
+          { properties: { bullet }, runs: [{ kind: 'run', text: 'Two' }] },
+        ],
+      };
+
+      const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+      const labels = [...el.querySelectorAll('span.pptx-bullet')].map((b) => b.textContent);
+      expect(labels).toEqual(['1.', '2.']);
+    });
   });
 });
