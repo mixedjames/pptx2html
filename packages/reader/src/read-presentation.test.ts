@@ -208,9 +208,15 @@ describe('readPresentation (synthetic end-to-end fixture)', () => {
     expect(master.theme.name).toBe('Office Theme');
     expect(master.theme.colorScheme.accent1).toEqual({ type: 'srgb', value: '4F81BD' });
     expect(master.layouts).toHaveLength(1);
-    expect(master.textStyles?.titleStyle?.levels[0]).toEqual({ fontSize: 4400, bold: true });
-    expect(master.textStyles?.bodyStyle?.levels[0]).toEqual({ fontSize: 2800 });
-    expect(presentation.defaultTextStyle?.levels[0]).toEqual({ fontSize: 1800 });
+    expect(master.textStyles?.titleStyle?.levels[0]).toEqual({
+      runProperties: { fontSize: 4400, bold: true },
+    });
+    expect(master.textStyles?.bodyStyle?.levels[0]).toEqual({
+      runProperties: { fontSize: 2800 },
+    });
+    expect(presentation.defaultTextStyle?.levels[0]).toEqual({
+      runProperties: { fontSize: 1800 },
+    });
 
     expect(presentation.slides).toHaveLength(1);
     const slide = presentation.slides[0]!;

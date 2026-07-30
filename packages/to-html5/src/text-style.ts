@@ -4,15 +4,17 @@ import type {
   Placeholder,
   PlaceholderType,
   RunProperties,
+  TextAlignment,
   TextBody,
   TextListStyle,
+  TextListStyleLevel,
   TextRunElement,
 } from '@pptx2html/presentation';
 
 import { findPlaceholderMatch } from './placeholder.js';
 import type { RenderContext } from './render-context.js';
 
-function levelOf(style: TextListStyle | undefined, level: number): RunProperties | undefined {
+function levelOf(style: TextListStyle | undefined, level: number): TextListStyleLevel | undefined {
   return style?.levels[level];
 }
 
@@ -29,22 +31,10 @@ function masterStyleCategory(
   return 'bodyStyle';
 }
 
-/** Layers each source over the previous, later sources winning per-field; missing fields fall through. */
-function mergeRunProperties(...sources: readonly (RunProperties | undefined)[]): RunProperties {
-  const merged: Record<string, unknown> = {};
-  for (const source of sources) {
-    if (!source) continue;
-    for (const [key, value] of Object.entries(source)) {
-      if (value !== undefined) merged[key] = value;
-    }
-  }
-  return merged as RunProperties;
-}
-
 /**
- * Resolves a run's effective character formatting by walking the OOXML text-property inheritance
- * chain (§21.1.2, simplified — the spec's exact algorithm is under-specified at the edges; this
- * follows the order real-world renderers converge on), lowest to highest priority:
+ * Collects this paragraph's outline level from every rung of the list-style inheritance chain
+ * (§21.1.2, simplified — the spec's exact algorithm is under-specified at the edges; this follows
+ * the order real-world renderers converge on), lowest to highest priority:
  *
  * 1. `context.defaultTextStyle` — the presentation's own default (`p:defaultTextStyle`).
  * 2. The slide master's title/body/other style for this placeholder's category.
@@ -52,22 +42,18 @@ function mergeRunProperties(...sources: readonly (RunProperties | undefined)[]):
  *    `resolveInheritedTransform`'s layout->master walk, one level further out).
  * 4. The layout's own matching placeholder shape's list style, if any.
  * 5. This shape's own list style (`TextBody.listStyle`).
- * 6. This paragraph's own default run properties (`pPr`'s defRPr).
- * 7. The run's own properties (`rPr`).
  *
- * Each step only supplies the per-field defaults for the paragraph's own outline level
- * (`paragraph.properties.level`, 0-based) — a level a source doesn't define contributes nothing.
- * Theme font-scheme resolution (`+mj-lt` etc.) is deliberately not done here — see
- * `resolveTypeface`, since it only concerns the `typeface` field and needs the theme, not a list
- * style.
+ * Shared by `resolveEffectiveRunProperties` (character formatting) and
+ * `resolveEffectiveAlignment` (paragraph alignment) — both need this same chain, just merged
+ * differently (a field-by-field merge for run properties vs. "first defined wins" for the single
+ * `alignment` scalar).
  */
-export function resolveEffectiveRunProperties(
-  run: TextRunElement,
+function levelChain(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
   context: RenderContext,
-): RunProperties {
+): readonly (TextListStyleLevel | undefined)[] {
   const level = paragraph.properties?.level ?? 0;
   const layout = context.layout;
   const master = layout?.master;
@@ -99,14 +85,68 @@ export function resolveEffectiveRunProperties(
     level,
   );
 
-  return mergeRunProperties(
+  return [
     levelOf(context.defaultTextStyle, level),
     masterCategoryLevel,
     masterPlaceholderLevel,
     layoutPlaceholderLevel,
     levelOf(shapeTextBody.listStyle, level),
+  ];
+}
+
+/** Layers each source over the previous, later sources winning per-field; missing fields fall through. */
+function mergeRunProperties(...sources: readonly (RunProperties | undefined)[]): RunProperties {
+  const merged: Record<string, unknown> = {};
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [key, value] of Object.entries(source)) {
+      if (value !== undefined) merged[key] = value;
+    }
+  }
+  return merged as RunProperties;
+}
+
+/**
+ * Resolves a run's effective character formatting by walking `levelChain`, then layering this
+ * paragraph's own default run properties (`pPr`'s defRPr) and finally the run's own properties
+ * (`rPr`) on top. Each step only supplies the per-field defaults for the paragraph's own outline
+ * level (`paragraph.properties.level`, 0-based) — a level a source doesn't define contributes
+ * nothing. Theme font-scheme resolution (`+mj-lt` etc.) is deliberately not done here — see
+ * `resolveTypeface`, since it only concerns the `typeface` field and needs the theme, not a list
+ * style.
+ */
+export function resolveEffectiveRunProperties(
+  run: TextRunElement,
+  paragraph: Paragraph,
+  shapeTextBody: TextBody,
+  placeholder: Placeholder | undefined,
+  context: RenderContext,
+): RunProperties {
+  const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
+  return mergeRunProperties(
+    ...chain.map((entry) => entry?.runProperties),
     paragraph.properties?.defaultRunProperties,
     run.properties,
+  );
+}
+
+/**
+ * Resolves a paragraph's effective alignment: its own explicit `alignment` if it has one,
+ * otherwise the closest-defined one found walking `levelChain` (same chain
+ * `resolveEffectiveRunProperties` uses, but "first defined wins" rather than merged field-by-field
+ * — `alignment` is a single scalar, not a set of independent properties).
+ */
+export function resolveEffectiveAlignment(
+  paragraph: Paragraph,
+  shapeTextBody: TextBody,
+  placeholder: Placeholder | undefined,
+  context: RenderContext,
+): TextAlignment | undefined {
+  if (paragraph.properties?.alignment) return paragraph.properties.alignment;
+  const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
+  return chain.reduce<TextAlignment | undefined>(
+    (inherited, entry) => entry?.alignment ?? inherited,
+    undefined,
   );
 }
 

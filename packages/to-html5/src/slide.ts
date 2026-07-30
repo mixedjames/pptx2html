@@ -21,6 +21,10 @@ export function renderSlide(
   // with no JS involved.
   el.style.width = '100%';
   el.style.aspectRatio = `${slideSize.width} / ${slideSize.height}`;
+  // Establishes `.pptx-slide` as a query container so descendants can size themselves in `cqw`
+  // (a percentage of *this* element's own width) rather than a fixed px/pt value — see
+  // units.ts's emuToCqw for why that's how font-size/border-width scale with the slide.
+  el.style.setProperty('container-type', 'inline-size');
 
   const background = resolveEffectiveBackground(slide);
   if (background) applyFill(el, background.fill, slide.layout.master.theme.colorScheme);

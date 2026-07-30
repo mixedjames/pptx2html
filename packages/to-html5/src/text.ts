@@ -2,19 +2,45 @@ import type {
   Paragraph,
   Placeholder,
   RunProperties,
+  TextAlignment,
   TextBody,
   TextRunElement,
 } from '@pptx2html/presentation';
 
 import { resolveFillColor } from './color.js';
 import type { RenderContext } from './render-context.js';
-import { resolveEffectiveRunProperties, resolveTypeface } from './text-style.js';
+import {
+  resolveEffectiveAlignment,
+  resolveEffectiveRunProperties,
+  resolveTypeface,
+} from './text-style.js';
+import { emuToCqw, fontSizeToEmu } from './units.js';
+
+/**
+ * CSS has no "distributed" text-align keyword (OOXML's variant of justify that also stretches
+ * the last line, not just the ones before it) — `text-align-last: justify` is the closest
+ * approximation, applied alongside `text-align: justify` below.
+ */
+function applyAlignment(el: HTMLElement, alignment: TextAlignment | undefined): void {
+  switch (alignment) {
+    case undefined:
+      return;
+    case 'distributed':
+      el.style.textAlign = 'justify';
+      el.style.textAlignLast = 'justify';
+      return;
+    default:
+      el.style.textAlign = alignment;
+  }
+}
 
 /** Applies a run's resolved character formatting (see `text-style.ts`) as inline CSS. */
 function applyRunStyle(el: HTMLElement, properties: RunProperties, context: RenderContext): void {
   const typeface = resolveTypeface(properties.typeface, context.layout?.master.theme.fontScheme);
   if (typeface) el.style.fontFamily = `"${typeface}"`;
-  if (properties.fontSize !== undefined) el.style.fontSize = `${properties.fontSize / 100}pt`;
+  if (properties.fontSize !== undefined) {
+    el.style.fontSize = emuToCqw(fontSizeToEmu(properties.fontSize), context.slideSize.width);
+  }
   if (properties.bold) el.style.fontWeight = 'bold';
   if (properties.italic) el.style.fontStyle = 'italic';
 
@@ -67,6 +93,7 @@ function renderParagraph(
 ): HTMLElement {
   const p = doc.createElement('p');
   p.className = 'pptx-paragraph';
+  applyAlignment(p, resolveEffectiveAlignment(paragraph, textBody, placeholder, context));
   if (paragraph.runs.length === 0) {
     // An empty paragraph is still a blank line.
     p.appendChild(doc.createElement('br'));

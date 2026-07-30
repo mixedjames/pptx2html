@@ -10,11 +10,12 @@ presentation-specific parts).
 
 The type graph is complete enough that `@pptx2html/reader` parses real `.pptx`
 byte streams into it end-to-end (see `packages/reader/CLAUDE.md`), and
-`@pptx2html/to-html5` renders the result into a laid-out HTML5 DOM with a first
-formatting pass (font inheritance — typeface/size/bold/italic/underline/strike/color;
-everything else, e.g. shape fill/line, is still unformatted — see
-`packages/to-html5/CLAUDE.md`). `tsc -b`, `eslint`, `vitest run` and `prettier --check`
-are all green.
+`@pptx2html/to-html5` renders the result into a laid-out, responsively-scaled HTML5 DOM
+with several formatting passes done (font inheritance including alignment — typeface/
+size/bold/italic/underline/strike/color/alignment, all resolved through the full
+placeholder/master/theme chain; shape/picture fill/line; slide background). Table cell
+fill and table styles are the main remaining gap — see `packages/to-html5/CLAUDE.md`.
+`tsc -b`, `eslint`, `vitest run` and `prettier --check` are all green.
 
 ## Key design decision: resolved object graph, not relationship IDs
 
@@ -72,9 +73,10 @@ code (search for "unmodeled for the skeleton"):
   resolution assumes the default clrMap (bg1→lt1, tx1→dk1, bg2→lt2, tx2→dk2).
 - Custom shows on the root `Presentation`.
 - Path gradients (only linear-angle gradients are modeled in `GradientFill`).
-- Non-font-related paragraph properties in a `TextListStyle` level (indent, bullet/numbering) —
-  only each level's `defRPr` (character formatting) is modeled, since that's what `to-html5`'s
-  font-inheritance pass needs. `TextListStyle` (`drawingml/text.ts`) backs `TextBody.listStyle`,
+- Indent and bullet/numbering in a `TextListStyle` level — each level (`TextListStyleLevel`)
+  models `algn` (as `alignment`) and `defRPr` (as `runProperties`), since that's what
+  `to-html5`'s font/alignment inheritance pass needs, but not the other paragraph properties a
+  real `a:lvlNpPr` can carry. `TextListStyle` (`drawingml/text.ts`) backs `TextBody.listStyle`,
   `SlideMaster.textStyles` (title/body/other) and `Presentation.defaultTextStyle` alike — see
   `to-html5/CLAUDE.md`'s font-inheritance design decision for how a consumer walks all three.
 
@@ -86,9 +88,11 @@ avoiding.
 
 ## Next likely steps
 
-1. Font inheritance (run-level character formatting) is done; shape `fill`/`line`,
-   `Background`, and paragraph alignment are the next things `@pptx2html/to-html5`'s
-   formatting pass needs — none of them require new types here, `ShapeProperties.fill`/`.line`
-   and `Background` already exist (see that package's CLAUDE.md).
+1. Font/alignment inheritance, shape fill/line, and slide background are all done. Table cell
+   fill is the next thing `@pptx2html/to-html5` needs to render — `TableCell.fill` already
+   exists here and `reader` already parses it, `to-html5`'s `table.ts` just doesn't apply it yet
+   (see that package's CLAUDE.md). Table _style matrices_ referenced by a table's style ID
+   (banded rows, header row styling, etc.) are a separate, unmodeled gap — see `FormatScheme`
+   above.
 2. Custom geometry path data and bullet/numbering are the two remaining layout
    (not just formatting) gaps most likely to visibly matter.

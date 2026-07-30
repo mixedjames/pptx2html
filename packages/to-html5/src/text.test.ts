@@ -35,6 +35,30 @@ describe('renderTextBody', () => {
     expect(paragraphs[1]?.querySelector('br')).not.toBeNull();
   });
 
+  it("applies a paragraph's alignment as text-align, approximating distributed via text-align-last", () => {
+    const textBody: TextBody = {
+      paragraphs: [
+        { properties: { alignment: 'center' }, runs: [{ kind: 'run', text: 'Centered' }] },
+        { properties: { alignment: 'distributed' }, runs: [{ kind: 'run', text: 'Distributed' }] },
+        { runs: [{ kind: 'run', text: 'Default' }] },
+      ],
+    };
+
+    const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
+    const paragraphs = el.querySelectorAll('p');
+    expect(paragraphs[0]?.style.textAlign).toBe('center');
+    expect(paragraphs[1]?.style.textAlign).toBe('justify');
+    expect(paragraphs[1]?.style.textAlignLast).toBe('justify');
+    expect(paragraphs[2]?.style.textAlign).toBe('');
+  });
+
+  // NOTE: font-size is set in `cqw` (container query width units, see units.ts's `emuToCqw`) so
+  // it scales with the slide — but happy-dom's CSSOM doesn't recognize `cqw` as a valid length
+  // yet and silently drops the assignment (confirmed: real browsers with Container Query Unit
+  // support, e.g. Chrome 105+, accept it fine). The `emuToCqw`/`fontSizeToEmu` conversion math is
+  // covered directly, without a DOM, in units.test.ts; the tests below can't assert
+  // `style.fontSize` itself as a result.
+
   it("applies a run's own character formatting as inline CSS", () => {
     const textBody: TextBody = {
       paragraphs: [
@@ -62,7 +86,6 @@ describe('renderTextBody', () => {
     const span = el.querySelector('span.pptx-run') as HTMLElement;
     // The CSSOM re-serializes a quoted single-token family name without the quotes.
     expect(span.style.fontFamily).toBe('Georgia');
-    expect(span.style.fontSize).toBe('18pt');
     expect(span.style.fontWeight).toBe('bold');
     expect(span.style.fontStyle).toBe('italic');
     expect(span.style.textDecoration).toBe('underline line-through');
@@ -118,12 +141,12 @@ describe('renderTextBody', () => {
     expect(span.style.fontFamily).toBe('"Calibri Light"');
   });
 
-  it("inherits font size from the shape's own placeholder via the master's title style", () => {
+  it("inherits run properties from the shape's own placeholder via the master's title style", () => {
     const master: SlideMaster = {
       commonSlideData: { shapeTree: [] },
       layouts: [],
       theme: {} as never,
-      textStyles: { titleStyle: { levels: [{ fontSize: 4400, bold: true }] } },
+      textStyles: { titleStyle: { levels: [{ runProperties: { fontSize: 4400, bold: true } }] } },
     };
     const layout: SlideLayout = { commonSlideData: { shapeTree: [] }, master, type: 'title' };
     const context: RenderContext = {
@@ -137,7 +160,30 @@ describe('renderTextBody', () => {
 
     const el = renderTextBody(document, textBody, titlePlaceholder, context);
     const span = el.querySelector('span.pptx-run') as HTMLElement;
-    expect(span.style.fontSize).toBe('44pt');
+    // fontSize isn't independently checkable here — see the NOTE above — but it comes from the
+    // same resolved list-style level object as bold, so a correct bold proves the level was
+    // found and merged correctly.
     expect(span.style.fontWeight).toBe('bold');
+  });
+
+  it("inherits centered alignment from the master's title style, same as a placeholder's font size", () => {
+    const master: SlideMaster = {
+      commonSlideData: { shapeTree: [] },
+      layouts: [],
+      theme: {} as never,
+      textStyles: { titleStyle: { levels: [{ alignment: 'center' }] } },
+    };
+    const layout: SlideLayout = { commonSlideData: { shapeTree: [] }, master, type: 'title' };
+    const context: RenderContext = {
+      slideSize: { width: 1, height: 1 },
+      layout,
+      defaultTextStyle: undefined,
+    };
+
+    const titlePlaceholder: Shape['nonVisual']['placeholder'] = { type: 'title', index: 0 };
+    const textBody: TextBody = { paragraphs: [{ runs: [{ kind: 'run', text: 'Title' }] }] };
+
+    const el = renderTextBody(document, textBody, titlePlaceholder, context);
+    expect(el.querySelector('p')?.style.textAlign).toBe('center');
   });
 });

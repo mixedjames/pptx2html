@@ -1,7 +1,7 @@
-import type { ColorScheme, Fill, GradientFill, Line } from '@pptx2html/presentation';
+import type { ColorScheme, Emu, Fill, GradientFill, Line } from '@pptx2html/presentation';
 
 import { resolveColor, resolveFillColor } from './color.js';
-import { emuToPx } from './units.js';
+import { emuToCqw } from './units.js';
 
 /** DrawingML's shade-path angle (§20.1.8.41, `<a:lin ang="...">`, 60,000ths of a degree, clockwise
  * from 3 o'clock/east — 0 means "left edge color to right edge color") is measured from a
@@ -102,15 +102,18 @@ const DEFAULT_LINE_WIDTH_EMU = 12700;
  * Applies a shape/picture's outline (§20.1.2.2.24, spPr's ln) as a CSS border. Only a solid line
  * fill resolves to an explicit `border-color` — a gradient/pattern/blip-filled outline is rare
  * enough on a plain shape border that it's left to CSS's own default (`currentColor`) rather than
- * picking an arbitrary single color out of it.
+ * picking an arbitrary single color out of it. `slideWidth` scales the border's own weight with
+ * the slide (see `units.ts`'s `emuToCqw`), the same way font sizes do — a border expressed in a
+ * fixed px would look disproportionately thick/thin as the slide is resized.
  */
 export function applyLine(
   el: HTMLElement,
   line: Line | undefined,
   scheme: ColorScheme | undefined,
+  slideWidth: Emu,
 ): void {
   if (!line || line.fill?.type === 'none') return;
-  el.style.borderWidth = `${emuToPx(line.width ?? DEFAULT_LINE_WIDTH_EMU)}px`;
+  el.style.borderWidth = emuToCqw(line.width ?? DEFAULT_LINE_WIDTH_EMU, slideWidth);
   el.style.borderStyle = borderStyleFor(line);
   const color = line.fill ? resolveFillColor(line.fill, scheme) : undefined;
   if (color) el.style.borderColor = color;

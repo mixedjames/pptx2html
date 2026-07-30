@@ -9,6 +9,7 @@ import type {
   TextBodyProperties,
   TextField,
   TextListStyle,
+  TextListStyleLevel,
   TextRun,
   TextRunElement,
   TextWrap,
@@ -162,10 +163,26 @@ const LEVEL_TAGS = [
   'lvl9pPr',
 ] as const;
 
+function parseTextListStyleLevel(
+  levelNode: XmlNode,
+  resolveMedia: MediaResolver,
+): TextListStyleLevel | undefined {
+  const algn = attr(levelNode, 'algn');
+  const alignment = algn ? ALIGNMENT_MAP[algn] : undefined;
+  const runProperties = parseRunProperties(findChild(levelNode, 'defRPr'), resolveMedia);
+
+  const level: TextListStyleLevel = {
+    ...(alignment ? { alignment } : {}),
+    ...(runProperties ? { runProperties } : {}),
+  };
+  return Object.keys(level).length > 0 ? level : undefined;
+}
+
 /**
  * Parses a per-level list style (§21.1.2.4.12, a:lstStyle, or the structurally identical
- * p:titleStyle/p:bodyStyle/p:otherStyle/p:defaultTextStyle) — only each level's defRPr, not the
- * paragraph properties a level can also carry (indent etc., unmodeled for the skeleton).
+ * p:titleStyle/p:bodyStyle/p:otherStyle/p:defaultTextStyle) — each level's `algn` and `defRPr`,
+ * not the other paragraph properties a level can also carry (indent etc., unmodeled for the
+ * skeleton).
  */
 export function parseTextListStyle(
   node: XmlNode | undefined,
@@ -174,7 +191,7 @@ export function parseTextListStyle(
   if (!node) return undefined;
   const levels = LEVEL_TAGS.map((tag) => {
     const levelNode = findChild(node, tag);
-    return levelNode ? parseRunProperties(findChild(levelNode, 'defRPr'), resolveMedia) : undefined;
+    return levelNode ? parseTextListStyleLevel(levelNode, resolveMedia) : undefined;
   });
   return levels.some((level) => level !== undefined) ? { levels } : undefined;
 }

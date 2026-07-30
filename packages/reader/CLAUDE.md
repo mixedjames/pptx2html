@@ -15,12 +15,13 @@ const presentation = readPresentation(uint8ArrayOfPptxBytes);
 Full read path is implemented end-to-end — themes, slide masters/layouts/slides,
 notes, tables, and the whole shape tree (shapes/pictures/connectors/graphic
 frames/groups) with all drawingml primitives (color, fill, line, geometry, text),
-including the full text-property inheritance surface: a paragraph's own `defRPr`,
+including the full text-property inheritance surface: a paragraph's own `algn`/`defRPr`,
 a shape's `txBody/lstStyle`, a slide master's `txStyles` (title/body/other), and the
 presentation's own `defaultTextStyle` are all parsed by `drawingml/text.ts`'s
 `parseTextListStyle` (shared across all four, since they're structurally identical —
-§21.1.2.4.12's `lvl1pPr`..`lvl9pPr`). `tsc -b`, `eslint`, `vitest run` (whole repo) and
-`prettier --check` all pass as of this writing.
+§21.1.2.4.12's `lvl1pPr`..`lvl9pPr`; each level's `algn` and `defRPr` become a
+`TextListStyleLevel`'s `alignment`/`runProperties`). `tsc -b`, `eslint`, `vitest run`
+(whole repo) and `prettier --check` all pass as of this writing.
 
 ## Layout (mirrors `packages/presentation/src`'s own file layout 1:1)
 

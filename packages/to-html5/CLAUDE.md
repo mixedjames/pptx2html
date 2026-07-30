@@ -10,26 +10,32 @@ const el = renderPresentation(presentation); // <pptx-presentation>, shadow DOM 
 document.body.appendChild(el);
 ```
 
-## Status: layout, plus formatting passes for fonts, shape fill/line, and slide backgrounds
+## Status: layout, plus formatting passes for fonts/alignment, shape fill/line, and slide backgrounds — all responsively scaled
 
 Every slide and shape lands in the right place at the right size, including placeholder shapes
 that inherit their position from the slide layout/master rather than declaring their own (very
 common in real decks — see `placeholder.ts`). Run-level character formatting (typeface, size,
-bold, italic, underline, strikethrough, text colour) renders too, fully resolved through
-OOXML's text-property inheritance chain — run → paragraph → shape → placeholder layout/master →
-master's title/body/other style → presentation default → theme font scheme (see "Key design
-decision: font inheritance chain" below). Shape/picture `fill`/`.line` (§20.1.2.2.35's spPr) also
-render, as CSS background/border (`fill.ts`) — solid fills, linear gradients, and (approximated)
-patterns/images for fill; solid-colored, dashed/dotted/double borders for line. A slide's own
-background renders too, falling back through layout then master (`background.ts`), reusing the
-same `fill.ts` machinery. Paragraph alignment and table cell/table styling are still unrendered —
-deliberately deferred to a later pass. See "Scope boundary" below for the precise line.
+bold, italic, underline, strikethrough, text colour) and paragraph alignment both render, fully
+resolved through the same OOXML text-property inheritance chain — run/paragraph → shape →
+placeholder layout/master → master's title/body/other style → presentation default → (fonts only)
+theme font scheme (see "Key design decision: font/alignment inheritance chain" below). Shape/picture
+`fill`/`.line` (§20.1.2.2.35's spPr) also render, as CSS background/border (`fill.ts`) — solid
+fills, linear gradients, and (approximated) patterns/images for fill; solid-colored,
+dashed/dotted/double borders for line. A slide's own background renders too, falling back through
+layout then master (`background.ts`), reusing the same `fill.ts` machinery. Every absolute
+magnitude this pass introduces — font size, border width — scales with the slide via CSS
+container query units rather than a fixed px/pt (see "Key design decision: absolute sizes scale
+via `cqw`" below), consistent with how position/size already scale via percentages. Table
+cell/table styling is still unrendered — deliberately deferred to a later pass.
 
 ## Layout
 
-- `units.ts` — `EMU_PER_PX` (9525, i.e. 96 CSS px/inch) and `emuToPx`. Exported for consumers;
-  no longer used internally by the positioning code below (see the percentage-based-layout
-  design decision).
+- `units.ts` — `EMU_PER_PX` (9525, i.e. 96 CSS px/inch) and `emuToPx`, exported for consumers but
+  no longer used internally (see the percentage-based-layout design decision). `EMU_PER_PT`
+  (12700) and `fontSizeToEmu` convert a run's `FontSize` (hundredths of a point) to EMU.
+  `emuToCqw(emu, slideWidth)` expresses any EMU magnitude as a percentage of the slide's own
+  width, suffixed `cqw` (CSS container query width units) instead of a fixed px/pt — see the
+  `cqw` design decision below.
 - `coordinate.ts` — pure math, no DOM, fully unit-testable in Node: `CoordinateMap` (an affine
   translate+scale from a local EMU space to the slide's root EMU space), `IDENTITY_MAP`,
   `composeGroupMap` (extends a map with a group's own transform so its children's transforms —
@@ -37,16 +43,23 @@ deliberately deferred to a later pass. See "Scope boundary" below for the precis
   `Transform2D` → slide-relative offset/extents, **still in EMU**, plus rotation/flip — converting
   to a CSS unit is left to the caller, see below).
 - `text.ts` / `table.ts` — pure content renderers (`TextBody` → `<div><p>…</p></div>`,
-  `Table` → `<table>`), no absolute positioning of their own; a paragraph is `<p>`, a run or field
-  is a `<span class="pptx-run">` (text content plus its resolved inline font styling — see below),
-  a break is `<br>`. `renderTable` sizes itself to `100%`/`100%` of its containing `graphicFrame`
-  div, `table-layout: fixed`, with `<col>` widths and `<tr>` heights expressed as a percentage of
-  the column-width/row-height totals (so column proportions survive scaling; row-height
-  percentages are best-effort — browsers that ignore them just size rows by content instead).
-- `text-style.ts` — pure logic, no DOM: `resolveEffectiveRunProperties` walks the run-property
-  inheritance chain (see the design decision below) and returns one merged `RunProperties`;
-  `resolveTypeface` resolves a `+mj-lt`/`+mn-lt`/etc. theme font token against a `FontScheme`,
-  passing any literal font name straight through.
+  `Table` → `<table>`), no absolute positioning of their own; a paragraph is `<p>` with its
+  effective `alignment` applied as `text-align` (`distributed` approximated via
+  `text-align: justify` plus `text-align-last: justify`, since CSS has no "distributed" keyword),
+  a run or field is a `<span class="pptx-run">` (text content plus its resolved inline font
+  styling, font-size in `cqw` via `emuToCqw`/`fontSizeToEmu` — see below), a break is `<br>`.
+  `renderTable` sizes itself to `100%`/`100%` of its containing `graphicFrame` div,
+  `table-layout: fixed`, with `<col>` widths and `<tr>` heights expressed as a percentage of the
+  column-width/row-height totals (so column proportions survive scaling; row-height percentages
+  are best-effort — browsers that ignore them just size rows by content instead).
+- `text-style.ts` — pure logic, no DOM: `levelChain` (private) collects a paragraph's outline
+  level from every rung of the list-style inheritance chain (see the design decision below) as an
+  ordered array of `TextListStyleLevel`s; `resolveEffectiveRunProperties` merges each level's
+  `runProperties` field-by-field into one `RunProperties`, `resolveEffectiveAlignment` reduces
+  each level's `alignment` scalar with "first (highest-priority) defined wins" instead — same
+  chain, different merge semantics, since alignment is a single value and character formatting is
+  a set of independent fields. `resolveTypeface` resolves a `+mj-lt`/`+mn-lt`/etc. theme font
+  token against a `FontScheme`, passing any literal font name straight through.
 - `color.ts` — pure logic, no DOM: `resolveColor` turns a DrawingML `Color` (srgb/scheme/system/
   preset/hsl, plus its `ColorTransform` modifiers — lumMod/lumOff/shade/tint/satMod/hueMod/alpha)
   into a CSS colour string; `resolveFillColor` is the `Fill`-level wrapper for the common
@@ -56,11 +69,12 @@ deliberately deferred to a later pass. See "Scope boundary" below for the precis
   bg2→lt2, tx2→dk2), since slide/layout clrMap overrides are unmodeled in `packages/presentation`.
 - `fill.ts` — DOM-touching (unlike `color.ts`): `applyFill` sets a shape/picture's CSS
   `background-color`/`background-image` from its `ShapeProperties.fill`, and `applyLine` sets
-  `border-width`/`-style`/`-color` from its `ShapeProperties.line`. `resolveGradientCss` (the one
-  pure piece, exported and separately tested) converts a `GradientFill` to a CSS
-  `linear-gradient(...)`, including translating DrawingML's shade-path angle convention (clockwise
-  from east) to CSS's (clockwise from north). A `blip` fill creates an object URL exactly like
-  `renderPicture` does for a picture's own image — same never-revoked caveat, see below.
+  `border-width`/`-style`/`-color` from its `ShapeProperties.line` (`border-width` in `cqw` via
+  `emuToCqw`, hence the extra `slideWidth` parameter). `resolveGradientCss` (the one pure piece,
+  exported and separately tested) converts a `GradientFill` to a CSS `linear-gradient(...)`,
+  including translating DrawingML's shade-path angle convention (clockwise from east) to CSS's
+  (clockwise from north). A `blip` fill creates an object URL exactly like `renderPicture` does
+  for a picture's own image — same never-revoked caveat, see below.
 - `placeholder.ts` — pure logic, no DOM: `resolveInheritedTransform` walks the OOXML placeholder
   inheritance chain (§19.3.1.36) — slide placeholder → matching layout placeholder (by
   type+index, falling back to index-only then type-only) → matching master placeholder, same
@@ -95,11 +109,13 @@ deliberately deferred to a later pass. See "Scope boundary" below for the precis
 - `slide.ts` — `renderSlide`: one `.pptx-slide` div, `position: relative; overflow: hidden`,
   `width: 100%` with `aspect-ratio: <slideWidth> / <slideHeight>` (raw EMU numbers — `aspect-ratio`
   only cares about the ratio) so it fills whatever width its container gives it and its height
-  follows automatically. Applies `resolveEffectiveBackground`'s result via `fill.ts`'s `applyFill`
-  directly on the slide div, before its `shapeTree` (walked from `IDENTITY_MAP` with a
-  `RenderContext` built from `slide.layout`, the passed-in `slideSize`, and an optional
-  `defaultTextStyle` — the presentation's `p:defaultTextStyle`, passed down from
-  `presentation-element.ts` since `Presentation` itself isn't otherwise threaded this deep).
+  follows automatically, plus `container-type: inline-size` so descendants can size themselves in
+  `cqw` against _this_ element's own rendered width (see the `cqw` design decision below). Applies
+  `resolveEffectiveBackground`'s result via `fill.ts`'s `applyFill` directly on the slide div,
+  before its `shapeTree` (walked from `IDENTITY_MAP` with a `RenderContext` built from
+  `slide.layout`, the passed-in `slideSize`, and an optional `defaultTextStyle` — the
+  presentation's `p:defaultTextStyle`, passed down from `presentation-element.ts` since
+  `Presentation` itself isn't otherwise threaded this deep).
 - `presentation-element.ts` — `PptxPresentationElement`, a `<pptx-presentation>` custom element.
   Shadow DOM is attached in the constructor; `.render(presentation)` replaces its slide children.
   `definePresentationElement()` registers the tag (idempotent).
@@ -143,12 +159,13 @@ the (common) unrotated-group case; a rotated group with rotated descendants will
 Fixing this means switching the rotated subtree to the nested-CSS-transform approach above —
 deliberately not done for this first pass.
 
-## Key design decision: font inheritance chain resolved eagerly per run, not via CSS cascade
+## Key design decision: font/alignment inheritance chain resolved eagerly per run/paragraph, not via CSS cascade
 
-A run's effective font could instead lean on the browser's own CSS cascade — apply each level's
-style to its own DOM ancestor and let `inherit`/unset properties flow down naturally. We didn't do
-that: `text-style.ts`'s `resolveEffectiveRunProperties` walks the whole chain in JS for every run
-and writes the fully-merged result as that run's own inline styles (mirrors
+A run's effective font (or a paragraph's effective alignment) could instead lean on the browser's
+own CSS cascade — apply each level's style to its own DOM ancestor and let `inherit`/unset
+properties flow down naturally. We didn't do that: `text-style.ts`'s `levelChain` walks the whole
+chain in JS for every paragraph, and `resolveEffectiveRunProperties`/`resolveEffectiveAlignment`
+write the fully-merged result as that run's/paragraph's own inline styles (mirrors
 `resolveInheritedTransform`'s approach to placeholder position, and the same "every element's box
 independently readable from its own inline styles" rationale as the CoordinateMap decision above).
 The chain, lowest to highest priority: `Presentation.defaultTextStyle` → the slide master's
@@ -157,13 +174,37 @@ placeholder types `bodyStyle`, non-placeholder shapes `otherStyle`) → the mast
 placeholder shape's `TextBody.listStyle` → the layout's matching placeholder shape's
 `TextBody.listStyle` (mirrors `resolveInheritedTransform`'s layout→master walk, via the same
 `findPlaceholderMatch`, now exported from `placeholder.ts` for this reuse) → the shape's own
-`TextBody.listStyle` → the paragraph's own `defRPr` → the run's own `rPr`. Each step only supplies
-defaults for the paragraph's own outline level (0-based, `TextListStyle.levels[level]`). This order
-is a reasonable synthesis of how real-world OOXML renderers describe the (spec-under-specified)
-inheritance, not a verified bit-exact match to PowerPoint. Theme font-scheme resolution
-(`+mj-lt`/`+mn-lt`/etc. → an actual typeface) is a separate, final step (`resolveTypeface`) since
-it only concerns the `typeface` field and needs the theme, not a list style — done in `text.ts`
-right before the style is applied, using `context.layout?.master.theme`.
+`TextBody.listStyle`. Run properties then layer the paragraph's own `defRPr` and finally the run's
+own `rPr` on top; alignment instead takes the paragraph's own `algn` outright if it has one (a
+single scalar, not a set of fields to merge). Each step only supplies defaults for the paragraph's
+own outline level (0-based, `TextListStyleLevel`, indexed via `TextListStyle.levels[level]`). This
+order is a reasonable synthesis of how real-world OOXML renderers describe the
+(spec-under-specified) inheritance, not a verified bit-exact match to PowerPoint. Theme font-scheme
+resolution (`+mj-lt`/`+mn-lt`/etc. → an actual typeface) is a separate, final step
+(`resolveTypeface`) since it only concerns the `typeface` field and needs the theme, not a list
+style — done in `text.ts` right before the style is applied, using `context.layout?.master.theme`.
+
+## Key design decision: absolute sizes (font size, border width) scale via CSS container query units, not JS
+
+Font size and border width are the first _magnitudes_ this renderer introduces that aren't
+themselves a position/size on the slide (those already scale for free via percentages — see
+above). A fixed `pt`/`px` value would look disproportionately large or small as `<pptx-presentation>`
+is resized, since it wouldn't shrink/grow along with the slide the way percentage-based position
+does. The options were: (a) reintroduce a `ResizeObserver` + JS recomputation — exactly what the
+percentage-based-layout decision above deliberately avoided for position, so rejected for the same
+reason; (b) `vw` (viewport width) units — wrong whenever `<pptx-presentation>` isn't the full
+browser viewport width, the common embedded case; (c) CSS **container query units** (`cqw`),
+relative to the nearest ancestor with `container-type` set — `slide.ts` sets
+`container-type: inline-size` on `.pptx-slide` itself, so `1cqw` is exactly 1% of the _slide's own_
+rendered width, matching the reference dimension `positionElement`'s percentages already use. (c)
+was chosen: `units.ts`'s `emuToCqw(emu, slideWidth)` computes `(emu / slideWidth) * 100 + 'cqw'` —
+literally the same formula as a position percentage, just a different unit suffix — used by
+`text.ts` for `font-size` (via `fontSizeToEmu`) and `fill.ts`'s `applyLine` for `border-width`.
+Trade-off: requires Container Query Unit support (Chrome 105+, Safari 16+, Firefox 110+ — fine for
+a 2026 target) and, as a knock-on effect, **`happy-dom`'s CSSOM doesn't recognize `cqw` as a valid
+length yet** — it silently drops any `el.style.fontSize`/`.borderWidth` assignment using it, so the
+DOM-level tests that exercise these (`text.test.ts`, `fill.test.ts`) can't assert on those specific
+properties' values; see their `NOTE` comments and the Tests section below.
 
 ## Scope boundary — what's intentionally unmodeled (yet)
 
@@ -182,11 +223,13 @@ right before the style is applied, using `context.layout?.master.theme`.
   needs either CSS `clip-path` per preset (and real path data for `custGeom`, still unmodeled in
   `packages/presentation`) or an SVG-based shape renderer; deliberately out of scope for this pass.
 - **Pattern fills are only approximated**, and colour transforms on preset colours are ignored —
-  see `fill.ts`'s and `color.ts`'s own doc comments for why.
-- **Remaining visual formatting**: paragraph alignment (`ParagraphProperties.alignment`),
-  `TextBodyProperties.anchor`/`wrap`, table cell fill, table styles. The DOM structure exists
-  (`.pptx-shape`, `.pptx-paragraph`, `.pptx-run`, etc.) precisely so a later pass can add CSS
-  without restructuring.
+  see `fill.ts`'s and `color.ts`'s own doc comments for why. The hatch overlay's own spacing
+  (`2px`/`8px` in the `repeating-linear-gradient`) is also a fixed px, not `cqw` — it's a purely
+  decorative stand-in already, not a real DrawingML magnitude, so it wasn't brought into the `cqw`
+  pass below.
+- **Remaining visual formatting**: `TextBodyProperties.anchor`/`wrap`, table cell fill, table
+  styles. The DOM structure exists (`.pptx-shape`, `.pptx-paragraph`, `.pptx-run`, etc.) precisely
+  so a later pass can add CSS without restructuring.
 - **Placeholder inheritance is supported, but with a simplified matching rule.** See
   `placeholder.ts` above. Not modeled: the spec's type-equivalence groups (e.g. a slide's
   `ctrTitle` placeholder is allowed to match a layout's `title` placeholder) — only exact type
@@ -210,14 +253,16 @@ right before the style is applied, using `context.layout?.master.theme`.
 
 ## Tests
 
-`coordinate.test.ts`, `placeholder.test.ts`, `text-style.test.ts`, `color.test.ts` and
-`background.test.ts` are pure Node (no DOM) and cover the affine math, the placeholder transform
-inheritance chain (layout match, master fallback, no-match), the font-property inheritance chain
-(every rung from `defaultTextStyle` down to a run's own `rPr`, plus theme font-token resolution),
-DrawingML colour resolution (scheme aliasing, hsl/srgb/system conversion, transforms), and the
-slide/layout/master background fallback chain, directly. Everything else that touches the DOM
-(`slide.test.ts`, `table.test.ts`, `text.test.ts`, `fill.test.ts`, `shape-tree.test.ts`,
-`presentation-element.test.ts`) opts into `happy-dom` per-file via a
+`coordinate.test.ts`, `placeholder.test.ts`, `text-style.test.ts`, `color.test.ts`,
+`background.test.ts` and `units.test.ts` are pure Node (no DOM) and cover the affine math, the
+placeholder transform inheritance chain (layout match, master fallback, no-match), the shared
+`levelChain` walked by both the font-property and alignment inheritance resolvers (every rung
+from `defaultTextStyle` down to a run's own `rPr`/a paragraph's own `algn`, plus theme font-token
+resolution), DrawingML colour resolution (scheme aliasing, hsl/srgb/system conversion,
+transforms), the slide/layout/master background fallback chain, and the EMU→px/pt/cqw conversion
+math, directly. Everything else that touches the DOM (`slide.test.ts`, `table.test.ts`,
+`text.test.ts`, `fill.test.ts`, `shape-tree.test.ts`, `presentation-element.test.ts`) opts into
+`happy-dom` per-file via a
 `// @vitest-environment happy-dom` docblock — the repo's root `vitest.config.ts` stays on
 `environment: 'node'` for every other package, this is the only one that needs a DOM.
 `slide.test.ts` asserts percentages via a local `pct()` helper that mirrors `positionElement`'s
@@ -228,18 +273,27 @@ nested-group percentage remapping (including that the group wrapper is stretched
 picking up its layout placeholder's position. `table.test.ts` checks column/row percentages sum
 to the expected split (50/50 for two equal-width columns) rather than absolute values. `text.test.ts`
 covers run→span rendering, inline style application for every character-formatting field, theme
-font-token resolution against a real `Theme`, and a placeholder shape picking up the master's
-title style through `renderTextBody`'s `placeholder`/`context` parameters end-to-end. `fill.test.ts`
+font-token resolution against a real `Theme`, a placeholder shape picking up the master's title
+style through `renderTextBody`'s `placeholder`/`context` parameters end-to-end, and paragraph
+`alignment` → `text-align` (including the `distributed` → `text-align`+`text-align-last`
+approximation and the no-alignment default). `fill.test.ts`
 covers `applyFill`/`applyLine`/`resolveGradientCss` directly (solid/gradient/pattern/blip fill,
 dash-style→border-style mapping, noFill short-circuiting); `shape-tree.test.ts` is a thin
 integration check that `renderShapeTreeNode` actually wires a shape's/picture's own `fill`/`.line`
 through to the rendered element, and `slide.test.ts` has the equivalent check for
 `resolveEffectiveBackground` being applied by `renderSlide`.
 
+**Known test-environment gap**: `text.test.ts` and `fill.test.ts` can't assert on the actual
+`style.fontSize`/`style.borderWidth` values `applyRunStyle`/`applyLine` set, because those are now
+`cqw` values and `happy-dom`'s CSSOM silently drops style assignments in units it doesn't
+recognize yet (confirmed real browsers with Container Query Unit support accept them fine — see
+the `cqw` design decision above). Both files have a `NOTE` comment at the point this bites; the
+actual `emuToCqw`/`fontSizeToEmu` conversion math is still fully covered, DOM-free, in
+`units.test.ts`.
+
 ## Next likely steps
 
-1. `TextBodyProperties.anchor`/`wrap` → flex/white-space, `ParagraphProperties.alignment` →
-   `text-align`, table cell fill, table styles.
+1. `TextBodyProperties.anchor`/`wrap` → flex/white-space, table cell fill, table styles.
 2. Connector line rendering (see the scope boundary above) — likely an SVG line/path overlay
    sized to the connector's own box, reusing `applyLine`'s color/width/dash resolution but not its
    `border-*` output.

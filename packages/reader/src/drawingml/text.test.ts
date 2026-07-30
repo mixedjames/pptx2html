@@ -101,29 +101,39 @@ describe('drawingml/text', () => {
     );
 
     const body = parseTextBody(node, noMedia);
-    expect(body?.listStyle?.levels[0]).toEqual({ fontSize: 1800 });
-    expect(body?.listStyle?.levels[1]).toEqual({ fontSize: 1600, italic: true });
+    expect(body?.listStyle?.levels[0]).toEqual({ runProperties: { fontSize: 1800 } });
+    expect(body?.listStyle?.levels[1]).toEqual({
+      runProperties: { fontSize: 1600, italic: true },
+    });
     expect(body?.listStyle?.levels[2]).toBeUndefined();
   });
 });
 
 describe('parseTextListStyle', () => {
-  it('parses each lvlNpPr child’s defRPr, indexed 0-based, skipping absent levels', () => {
+  it('parses each lvlNpPr child’s algn and defRPr, indexed 0-based, skipping absent levels', () => {
     const node = firstNode(
       `<a:lstStyle xmlns:a="a">
-        <a:lvl1pPr><a:defRPr sz="3200" b="1"/></a:lvl1pPr>
+        <a:lvl1pPr algn="ctr"><a:defRPr sz="3200" b="1"/></a:lvl1pPr>
         <a:lvl3pPr><a:defRPr><a:latin typeface="Georgia"/></a:defRPr></a:lvl3pPr>
       </a:lstStyle>`,
     );
 
     const style = parseTextListStyle(node, noMedia);
     expect(style?.levels).toHaveLength(9);
-    expect(style?.levels[0]).toEqual({ fontSize: 3200, bold: true });
+    expect(style?.levels[0]).toEqual({
+      alignment: 'center',
+      runProperties: { fontSize: 3200, bold: true },
+    });
     expect(style?.levels[1]).toBeUndefined();
-    expect(style?.levels[2]).toEqual({ typeface: 'Georgia' });
+    expect(style?.levels[2]).toEqual({ runProperties: { typeface: 'Georgia' } });
   });
 
-  it('returns undefined when no level carries a defRPr', () => {
+  it('parses a level with only an algn and no defRPr', () => {
+    const node = firstNode(`<a:lstStyle xmlns:a="a"><a:lvl1pPr algn="r"/></a:lstStyle>`);
+    expect(parseTextListStyle(node, noMedia)?.levels[0]).toEqual({ alignment: 'right' });
+  });
+
+  it('returns undefined when no level carries an algn or defRPr', () => {
     const node = firstNode(`<a:lstStyle xmlns:a="a"><a:lvl1pPr/></a:lstStyle>`);
     expect(parseTextListStyle(node, noMedia)).toBeUndefined();
   });

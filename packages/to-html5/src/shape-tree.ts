@@ -72,7 +72,7 @@ function renderShape(
   if (transform) positionElement(el, map, transform, context);
   const scheme = context.layout?.master.theme.colorScheme;
   applyFill(el, shape.properties.fill, scheme);
-  applyLine(el, shape.properties.line, scheme);
+  applyLine(el, shape.properties.line, scheme, context.slideSize.width);
   if (shape.textBody) {
     el.appendChild(renderTextBody(doc, shape.textBody, shape.nonVisual.placeholder, context));
   }
@@ -98,7 +98,7 @@ function renderPicture(
   // colored spPr fill) — same fill/line properties a shape carries, since Picture shares
   // ShapeProperties.
   applyFill(el, picture.properties.fill, scheme);
-  applyLine(el, picture.properties.line, scheme);
+  applyLine(el, picture.properties.line, scheme, context.slideSize.width);
   const blob = new Blob([new Uint8Array(picture.image.data)], { type: picture.image.contentType });
   el.src = URL.createObjectURL(blob);
   return el;

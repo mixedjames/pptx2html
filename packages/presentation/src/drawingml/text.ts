@@ -66,15 +66,24 @@ export interface TextBodyProperties {
 }
 
 /**
- * Per-outline-level default run properties (§21.1.2.4.12, a:lstStyle's lvl1pPr..lvl9pPr — only
- * each level's defRPr is modeled; the paragraph-level properties a level can also carry, like
- * indent, are unmodeled for the skeleton). Indexed 0-based, the same as
- * `ParagraphProperties.level`: `levels[0]` is level 1's defaults, etc. A shape's txBody
- * (`TextBody.listStyle`) and a slide master's title/body/other styles (`SlideMaster.textStyles`)
+ * One outline level's defaults within a `TextListStyle` (§21.1.2.4.12, a:lvl1pPr..lvl9pPr —
+ * structurally a full paragraph-properties element, but only `algn` and `defRPr` are modeled
+ * here; other paragraph-level properties a level can also carry, like indent/bullet/numbering,
+ * are unmodeled for the skeleton).
+ */
+export interface TextListStyleLevel {
+  readonly alignment?: TextAlignment;
+  readonly runProperties?: RunProperties;
+}
+
+/**
+ * Per-outline-level defaults (§21.1.2.4.12, a:lstStyle's lvl1pPr..lvl9pPr). Indexed 0-based, the
+ * same as `ParagraphProperties.level`: `levels[0]` is level 1's defaults, etc. A shape's txBody
+ * (`TextBody.listStyle`), a slide master's title/body/other styles (`SlideMaster.textStyles`),
  * and the presentation's own default (`Presentation.defaultTextStyle`) are all this same shape.
  */
 export interface TextListStyle {
-  readonly levels: readonly (RunProperties | undefined)[];
+  readonly levels: readonly (TextListStyleLevel | undefined)[];
 }
 
 /** A shape's or table cell's text content (§21.1.2.1.5, txBody). */

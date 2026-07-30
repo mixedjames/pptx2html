@@ -24,13 +24,17 @@ them.
 - **`packages/to-html5`** — layout is done: every slide and shape lands in the right place at the
   right size, including placeholder shapes that inherit position from their layout/master
   (`placeholder.ts`) and responsive scale-to-container-width via CSS percentages + `aspect-ratio`
-  (no JS resize handling). Formatting is under way step by step: run-level font formatting
-  (typeface/size/bold/italic/underline/strikethrough/color), fully resolved through OOXML's
-  text-property inheritance chain (run → paragraph → shape → placeholder layout/master → theme),
-  is done (`text-style.ts`, `color.ts`); shape/picture `fill`/`.line` → CSS background/border is
-  also done (`fill.ts`), and so is slide background (`background.ts`, falling back through
-  layout/master, reusing `fill.ts`). Paragraph alignment, table styles, and connector line
-  rendering are still unstyled by design. This is the actively-developed package right now.
+  (no JS resize handling). Formatting is under way step by step: run-level font formatting and
+  paragraph alignment (typeface/size/bold/italic/underline/strikethrough/color/alignment), fully
+  resolved through the same OOXML text-property inheritance chain (run/paragraph → shape →
+  placeholder layout/master → master category style → presentation default → theme), is done
+  (`text-style.ts`, `color.ts`); shape/picture `fill`/`.line` → CSS background/border is also done
+  (`fill.ts`), and so is slide background (`background.ts`, falling back through layout/master,
+  reusing `fill.ts`). Font size and border width — the first non-position magnitudes this pass
+  introduces — scale with the slide via CSS container query units (`cqw`) rather than a fixed
+  px/pt, the same no-JS philosophy as position/size (`units.ts`'s `emuToCqw`; see
+  `packages/to-html5/CLAUDE.md`). Table styles and connector line rendering are still unstyled by
+  design. This is the actively-developed package right now.
 - **`apps/web-demo`** — wired to both `reader` and `to-html5`: picking a `.pptx` file renders it
   into the page. `apps/web-demo/src/Presentation1.pptx` is a real (non-synthetic) fixture for
   manual browser testing. Verifying changes here in an actual browser is on the user, by
@@ -41,15 +45,19 @@ them.
 ## Significant todos
 
 1. **Formatting pass in `to-html5`** — the big remaining piece, being done step by step.
-   Run-level font formatting (typeface/size/bold/italic/underline/strikethrough/color) is done,
-   including full template/master inheritance (`SlideMaster.textStyles`,
-   `Presentation.defaultTextStyle`, theme font scheme). Shape/picture `ShapeProperties.fill`/`.line`
-   → CSS background/border is also done (`fill.ts`), including gradients and an approximated take
-   on pattern fills, and so is slide background (`background.ts`, falling back slide → layout →
-   master). Still remaining: paragraph alignment, table cell fill/styles, and actual shape geometry
-   (every shape/picture is still a rectangle, regardless of preset — fill/line paint that
-   rectangle, not the shape's real outline). The DOM structure (`.pptx-shape`, `.pptx-paragraph`,
-   `.pptx-run`, etc.) already exists so most of this should be additive CSS, not a restructure. See
+   Run-level font formatting and paragraph alignment (typeface/size/bold/italic/underline/
+   strikethrough/color/alignment) are both done, including full template/master inheritance
+   (`SlideMaster.textStyles`, `Presentation.defaultTextStyle`, theme font scheme — `alignment`
+   walks the exact same chain as character formatting, see `TextListStyleLevel` in
+   `packages/presentation`). Shape/picture `ShapeProperties.fill`/`.line` → CSS background/border
+   is also done (`fill.ts`), including gradients and an approximated take on pattern fills, and so
+   is slide background (`background.ts`, falling back slide → layout → master). Font size and
+   border width scale with the slide via `cqw` (container query width units) rather than a fixed
+   px/pt, so they resize along with position/size instead of looking disproportionate at other
+   container widths. Still remaining: table cell fill/styles, and actual shape geometry (every
+   shape/picture is still a rectangle, regardless of preset — fill/line paint that rectangle, not
+   the shape's real outline). The DOM structure (`.pptx-shape`, `.pptx-paragraph`, `.pptx-run`,
+   etc.) already exists so most of this should be additive CSS, not a restructure. See
    `packages/to-html5/CLAUDE.md`'s scope boundary for the full list and what's deliberately not
    modeled yet.
 2. **Known `to-html5` limitations**, in rough order of how often they'll bite: placeholder
@@ -68,12 +76,15 @@ them.
    installed without asking first.
 5. **`packages/core` is dead weight** — decide whether to delete it or repurpose it; right now it
    does nothing and nothing references it.
-6. **This session's work is uncommitted.** The font-formatting pass —
-   `TextListStyle`/`defaultRunProperties`/`listStyle`/`textStyles`/`defaultTextStyle` in
-   `presentation` and their parsers in `reader`, plus `to-html5`'s `text-style.ts`/`color.ts` —
-   the shape fill/line pass — `to-html5`'s `fill.ts`, wired into `shape-tree.ts`'s
-   `renderShape`/`renderPicture` — and the slide background pass — `to-html5`'s `background.ts`,
-   wired into `slide.ts`'s `renderSlide` — are all working-tree changes on top of the `to-html5`
+6. **This session's work is uncommitted.** The font/alignment-formatting pass —
+   `TextListStyle`/`TextListStyleLevel`/`defaultRunProperties`/`listStyle`/`textStyles`/
+   `defaultTextStyle` in `presentation` and their parsers in `reader`, plus `to-html5`'s
+   `text-style.ts` (`levelChain`, `resolveEffectiveRunProperties`, `resolveEffectiveAlignment`)
+   and `color.ts` — the shape fill/line pass — `to-html5`'s `fill.ts`, wired into
+   `shape-tree.ts`'s `renderShape`/`renderPicture` — the slide background pass — `to-html5`'s
+   `background.ts`, wired into `slide.ts`'s `renderSlide` — and the `cqw`-based responsive sizing
+   pass — `units.ts`'s `emuToCqw`/`fontSizeToEmu`, `slide.ts`'s `container-type: inline-size`,
+   and their use in `text.ts`/`fill.ts` — are all working-tree changes on top of the `to-html5`
    commit; nothing since has been committed.
 
 ## Where to look
