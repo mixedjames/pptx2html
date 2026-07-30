@@ -1,7 +1,14 @@
 // @vitest-environment happy-dom
 import type { Table } from '@pptx2html/presentation';
 import { describe, expect, it } from 'vitest';
+import type { RenderContext } from './render-context.js';
 import { renderTable } from './table.js';
+
+const CONTEXT: RenderContext = {
+  slideSize: { width: 1, height: 1 },
+  layout: undefined,
+  defaultTextStyle: undefined,
+};
 
 describe('renderTable', () => {
   it('renders columns/rows and skips merged cells in favor of the spanning cell', () => {
@@ -26,7 +33,7 @@ describe('renderTable', () => {
       ],
     };
 
-    const el = renderTable(document, table);
+    const el = renderTable(document, table, CONTEXT);
     expect(el.style.width).toBe('100%');
     expect(el.style.tableLayout).toBe('fixed');
 

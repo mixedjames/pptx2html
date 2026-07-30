@@ -1,5 +1,7 @@
 import type { Presentation, SlideSize } from '@pptx2html/presentation';
 
+import { createMediaResolver } from '../drawingml/media.js';
+import { parseTextListStyle } from '../drawingml/text.js';
 import { parseEmu } from '../drawingml/units.js';
 import type { ReaderContext } from '../reader-context.js';
 import type { XmlNode } from '../xml/parse.js';
@@ -69,6 +71,9 @@ export function readPresentationPart(context: ReaderContext, partName: string): 
   const notesMasterRel = notesMasterRId ? relationships.get(notesMasterRId) : undefined;
   const notesMaster = notesMasterRel ? readNotesMaster(context, notesMasterRel.target) : undefined;
 
+  const resolveMedia = createMediaResolver(context.package, partName, context.media);
+  const defaultTextStyle = parseTextListStyle(findChild(root, 'defaultTextStyle'), resolveMedia);
+
   return {
     slideSize,
     ...(notesSize ? { notesSize } : {}),
@@ -76,5 +81,6 @@ export function readPresentationPart(context: ReaderContext, partName: string): 
     slides,
     ...(notesMaster ? { notesMaster } : {}),
     notesSlides,
+    ...(defaultTextStyle ? { defaultTextStyle } : {}),
   };
 }

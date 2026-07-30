@@ -1,4 +1,4 @@
-import type { Emu } from '../drawingml/index.js';
+import type { Emu, TextListStyle } from '../drawingml/index.js';
 import type { NotesMaster, NotesSlide } from './notes.js';
 import type { Slide } from './slide.js';
 import type { SlideMaster } from './slide-master.js';
@@ -10,7 +10,7 @@ export interface SlideSize {
 
 /**
  * The root of the in-memory DOM, corresponding to the presentation part (§19.2.1.26, p:presentation).
- * Default text styles and custom shows are unmodeled for the skeleton.
+ * Custom shows are unmodeled for the skeleton.
  */
 export interface Presentation {
   readonly slideSize: SlideSize;
@@ -19,4 +19,6 @@ export interface Presentation {
   readonly slides: readonly Slide[];
   readonly notesMaster?: NotesMaster;
   readonly notesSlides: readonly NotesSlide[];
+  /** §19.2.1.9, p:defaultTextStyle — the bottom rung of the text-property inheritance chain. */
+  readonly defaultTextStyle?: TextListStyle;
 }

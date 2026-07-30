@@ -1,9 +1,16 @@
-import type { Slide, SlideSize } from '@pptx2html/presentation';
+import type { Slide, SlideSize, TextListStyle } from '@pptx2html/presentation';
+import { resolveEffectiveBackground } from './background.js';
 import { IDENTITY_MAP } from './coordinate.js';
+import { applyFill } from './fill.js';
 import type { RenderContext } from './render-context.js';
 import { renderShapeTreeNode } from './shape-tree.js';
 
-export function renderSlide(doc: Document, slide: Slide, slideSize: SlideSize): HTMLElement {
+export function renderSlide(
+  doc: Document,
+  slide: Slide,
+  slideSize: SlideSize,
+  defaultTextStyle?: TextListStyle,
+): HTMLElement {
   const el = doc.createElement('div');
   el.className = 'pptx-slide';
   el.style.position = 'relative';
@@ -15,7 +22,10 @@ export function renderSlide(doc: Document, slide: Slide, slideSize: SlideSize): 
   el.style.width = '100%';
   el.style.aspectRatio = `${slideSize.width} / ${slideSize.height}`;
 
-  const context: RenderContext = { slideSize, layout: slide.layout };
+  const background = resolveEffectiveBackground(slide);
+  if (background) applyFill(el, background.fill, slide.layout.master.theme.colorScheme);
+
+  const context: RenderContext = { slideSize, layout: slide.layout, defaultTextStyle };
   for (const node of slide.commonSlideData.shapeTree) {
     el.appendChild(renderShapeTreeNode(doc, node, IDENTITY_MAP, context));
   }

@@ -1,7 +1,8 @@
 import type { Table } from '@pptx2html/presentation';
+import type { RenderContext } from './render-context.js';
 import { renderTextBody } from './text.js';
 
-export function renderTable(doc: Document, table: Table): HTMLElement {
+export function renderTable(doc: Document, table: Table, context: RenderContext): HTMLElement {
   const el = doc.createElement('table');
   el.className = 'pptx-table';
   // Fills its containing graphicFrame div (itself sized as a percentage of the slide, see
@@ -34,7 +35,10 @@ export function renderTable(doc: Document, table: Table): HTMLElement {
       const td = doc.createElement('td');
       if (cell.rowSpan !== undefined && cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
       if (cell.colSpan !== undefined && cell.colSpan > 1) td.colSpan = cell.colSpan;
-      td.appendChild(renderTextBody(doc, cell.textBody));
+      // Table cells never carry a placeholder identity of their own (no nvPr/ph in the schema
+      // for a:tc), so cell text only falls back through the master's otherStyle/presentation
+      // default, not any placeholder-specific list style.
+      td.appendChild(renderTextBody(doc, cell.textBody, undefined, context));
       tr.appendChild(td);
     }
     tbody.appendChild(tr);

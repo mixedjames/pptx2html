@@ -1,9 +1,12 @@
-import type { SlideMaster, Theme } from '@pptx2html/presentation';
+import type { SlideMaster, TextStyles, Theme } from '@pptx2html/presentation';
 
+import type { MediaResolver } from '../drawingml/fill.js';
 import { createMediaResolver } from '../drawingml/media.js';
+import { parseTextListStyle } from '../drawingml/text.js';
 import type { Mutable } from '../mutable.js';
 import type { ReaderContext } from '../reader-context.js';
 import { emptyTheme, parseTheme } from '../theme.js';
+import type { XmlNode } from '../xml/parse.js';
 import { parseXml } from '../xml/parse.js';
 import { findChild, findRoot } from '../xml/query.js';
 import { EMPTY_COMMON_SLIDE_DATA, parseCommonSlideData } from './common-slide-data.js';
@@ -16,6 +19,24 @@ function readTheme(context: ReaderContext, partName: string): Theme {
   const theme = parseTheme(context.package.readText(partName));
   context.themes.set(partName, theme);
   return theme;
+}
+
+/** Parses p:txStyles (§19.3.1.53): the master's default text styles by placeholder category. */
+function parseTextStyles(
+  node: XmlNode | undefined,
+  resolveMedia: MediaResolver,
+): TextStyles | undefined {
+  if (!node) return undefined;
+  const titleStyle = parseTextListStyle(findChild(node, 'titleStyle'), resolveMedia);
+  const bodyStyle = parseTextListStyle(findChild(node, 'bodyStyle'), resolveMedia);
+  const otherStyle = parseTextListStyle(findChild(node, 'otherStyle'), resolveMedia);
+
+  const styles: TextStyles = {
+    ...(titleStyle ? { titleStyle } : {}),
+    ...(bodyStyle ? { bodyStyle } : {}),
+    ...(otherStyle ? { otherStyle } : {}),
+  };
+  return Object.keys(styles).length > 0 ? styles : undefined;
 }
 
 /**
@@ -38,11 +59,13 @@ export function readSlideMaster(context: ReaderContext, partName: string): Slide
   const relationships = context.package.relationshipsFor(partName);
   const themeRel = relationships.findByType(RELATIONSHIP_TYPES.theme)[0];
   const theme = themeRel ? readTheme(context, themeRel.target) : emptyTheme();
+  const textStyles = parseTextStyles(root && findChild(root, 'txStyles'), resolveMedia);
 
   const master = {
     commonSlideData,
     theme,
     layouts: [],
+    ...(textStyles ? { textStyles } : {}),
   } as Mutable<SlideMaster>;
   context.slideMasters.set(partName, master);
 

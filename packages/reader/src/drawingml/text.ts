@@ -8,6 +8,7 @@ import type {
   TextBody,
   TextBodyProperties,
   TextField,
+  TextListStyle,
   TextRun,
   TextRunElement,
   TextWrap,
@@ -95,22 +96,27 @@ function parseTextField(node: XmlNode, resolveMedia: MediaResolver): TextField {
   };
 }
 
-function parseParagraphProperties(node: XmlNode | undefined): ParagraphProperties | undefined {
+function parseParagraphProperties(
+  node: XmlNode | undefined,
+  resolveMedia: MediaResolver,
+): ParagraphProperties | undefined {
   if (!node) return undefined;
   const algn = attr(node, 'algn');
   const alignment = algn ? ALIGNMENT_MAP[algn] : undefined;
   const level = parseIntAttr(attr(node, 'lvl'));
+  const defaultRunProperties = parseRunProperties(findChild(node, 'defRPr'), resolveMedia);
 
   const properties: ParagraphProperties = {
     ...(alignment ? { alignment } : {}),
     ...(level !== undefined ? { level } : {}),
+    ...(defaultRunProperties ? { defaultRunProperties } : {}),
   };
   return Object.keys(properties).length > 0 ? properties : undefined;
 }
 
 /** Parses a:p (§21.1.2.2.6), preserving document order since runs/breaks/fields interleave. */
 function parseParagraph(node: XmlNode, resolveMedia: MediaResolver): Paragraph {
-  const properties = parseParagraphProperties(findChild(node, 'pPr'));
+  const properties = parseParagraphProperties(findChild(node, 'pPr'), resolveMedia);
   const runs: TextRunElement[] = [];
   for (const child of children(node)) {
     switch (localName(child)) {
@@ -144,6 +150,35 @@ function parseBodyProperties(node: XmlNode | undefined): TextBodyProperties | un
   return Object.keys(properties).length > 0 ? properties : undefined;
 }
 
+const LEVEL_TAGS = [
+  'lvl1pPr',
+  'lvl2pPr',
+  'lvl3pPr',
+  'lvl4pPr',
+  'lvl5pPr',
+  'lvl6pPr',
+  'lvl7pPr',
+  'lvl8pPr',
+  'lvl9pPr',
+] as const;
+
+/**
+ * Parses a per-level list style (§21.1.2.4.12, a:lstStyle, or the structurally identical
+ * p:titleStyle/p:bodyStyle/p:otherStyle/p:defaultTextStyle) — only each level's defRPr, not the
+ * paragraph properties a level can also carry (indent etc., unmodeled for the skeleton).
+ */
+export function parseTextListStyle(
+  node: XmlNode | undefined,
+  resolveMedia: MediaResolver,
+): TextListStyle | undefined {
+  if (!node) return undefined;
+  const levels = LEVEL_TAGS.map((tag) => {
+    const levelNode = findChild(node, tag);
+    return levelNode ? parseRunProperties(findChild(levelNode, 'defRPr'), resolveMedia) : undefined;
+  });
+  return levels.some((level) => level !== undefined) ? { levels } : undefined;
+}
+
 /** Parses a txBody (§21.1.2.1.5). */
 export function parseTextBody(
   node: XmlNode | undefined,
@@ -151,6 +186,7 @@ export function parseTextBody(
 ): TextBody | undefined {
   if (!node) return undefined;
   const properties = parseBodyProperties(findChild(node, 'bodyPr'));
+  const listStyle = parseTextListStyle(findChild(node, 'lstStyle'), resolveMedia);
   const paragraphs = findAllChildren(node, 'p').map((p) => parseParagraph(p, resolveMedia));
-  return { ...(properties ? { properties } : {}), paragraphs };
+  return { ...(properties ? { properties } : {}), ...(listStyle ? { listStyle } : {}), paragraphs };
 }

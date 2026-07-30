@@ -29,12 +29,15 @@ const ROOT_RELS = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </Relationships>`;
 
 const PRESENTATION_XML = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>
   <p:sldIdLst><p:sldId id="256" r:id="rId2"/></p:sldIdLst>
   <p:notesMasterIdLst><p:notesMasterId r:id="rId3"/></p:notesMasterIdLst>
   <p:sldSz cx="12192000" cy="6858000"/>
   <p:notesSz cx="6858000" cy="9144000"/>
+  <p:defaultTextStyle>
+    <a:lvl1pPr><a:defRPr sz="1800"/></a:lvl1pPr>
+  </p:defaultTextStyle>
 </p:presentation>`;
 
 const PRESENTATION_RELS = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -82,6 +85,14 @@ const SLIDE_MASTER_XML = xml`<?xml version="1.0" encoding="UTF-8" standalone="ye
       </p:sp>
     </p:spTree>
   </p:cSld>
+  <p:txStyles>
+    <p:titleStyle>
+      <a:lvl1pPr><a:defRPr sz="4400" b="1"/></a:lvl1pPr>
+    </p:titleStyle>
+    <p:bodyStyle>
+      <a:lvl1pPr><a:defRPr sz="2800"/></a:lvl1pPr>
+    </p:bodyStyle>
+  </p:txStyles>
 </p:sldMaster>`;
 
 const SLIDE_MASTER_RELS = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -197,6 +208,9 @@ describe('readPresentation (synthetic end-to-end fixture)', () => {
     expect(master.theme.name).toBe('Office Theme');
     expect(master.theme.colorScheme.accent1).toEqual({ type: 'srgb', value: '4F81BD' });
     expect(master.layouts).toHaveLength(1);
+    expect(master.textStyles?.titleStyle?.levels[0]).toEqual({ fontSize: 4400, bold: true });
+    expect(master.textStyles?.bodyStyle?.levels[0]).toEqual({ fontSize: 2800 });
+    expect(presentation.defaultTextStyle?.levels[0]).toEqual({ fontSize: 1800 });
 
     expect(presentation.slides).toHaveLength(1);
     const slide = presentation.slides[0]!;

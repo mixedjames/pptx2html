@@ -121,4 +121,32 @@ describe('renderSlide', () => {
     expect(shapeEl.style.width).toBe(pct(8229600, SLIDE_SIZE.width));
     expect(shapeEl.textContent).toBe('Title');
   });
+
+  it("applies the slide's own background, falling back to the master's when the slide has none", () => {
+    const master: Slide['layout']['master'] = {
+      commonSlideData: {
+        shapeTree: [],
+        background: { fill: { type: 'solid', color: { type: 'srgb', value: '0000FF' } } },
+      },
+      theme: {} as never,
+      layouts: [],
+    };
+    const layout: Slide['layout'] = { commonSlideData: { shapeTree: [] }, master, type: 'blank' };
+
+    const withOwnBackground: Slide = {
+      commonSlideData: {
+        shapeTree: [],
+        background: { fill: { type: 'solid', color: { type: 'srgb', value: 'FF0000' } } },
+      },
+      layout,
+    };
+    expect(renderSlide(document, withOwnBackground, SLIDE_SIZE).style.backgroundColor).toBe(
+      'rgb(255, 0, 0)',
+    );
+
+    const inheritingSlide: Slide = { commonSlideData: { shapeTree: [] }, layout };
+    expect(renderSlide(document, inheritingSlide, SLIDE_SIZE).style.backgroundColor).toBe(
+      'rgb(0, 0, 255)',
+    );
+  });
 });

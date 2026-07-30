@@ -32,7 +32,12 @@ export class PptxPresentationElement extends HTMLElement {
   render(presentation: Presentation): void {
     this.#slidesContainer.replaceChildren(
       ...presentation.slides.map((slide) =>
-        renderSlide(this.ownerDocument, slide, presentation.slideSize),
+        renderSlide(
+          this.ownerDocument,
+          slide,
+          presentation.slideSize,
+          presentation.defaultTextStyle,
+        ),
       ),
     );
   }

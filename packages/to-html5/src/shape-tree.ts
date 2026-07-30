@@ -10,6 +10,7 @@ import type {
   Transform2D,
 } from '@pptx2html/presentation';
 import { type CoordinateMap, composeGroupMap, computeBox } from './coordinate.js';
+import { applyFill, applyLine } from './fill.js';
 import { resolveInheritedTransform } from './placeholder.js';
 import type { RenderContext } from './render-context.js';
 import { renderTable } from './table.js';
@@ -69,7 +70,12 @@ function renderShape(
     context.layout,
   );
   if (transform) positionElement(el, map, transform, context);
-  if (shape.textBody) el.appendChild(renderTextBody(doc, shape.textBody));
+  const scheme = context.layout?.master.theme.colorScheme;
+  applyFill(el, shape.properties.fill, scheme);
+  applyLine(el, shape.properties.line, scheme);
+  if (shape.textBody) {
+    el.appendChild(renderTextBody(doc, shape.textBody, shape.nonVisual.placeholder, context));
+  }
   return el;
 }
 
@@ -87,6 +93,12 @@ function renderPicture(
     context.layout,
   );
   if (transform) positionElement(el, map, transform, context);
+  const scheme = context.layout?.master.theme.colorScheme;
+  // Shows through any transparent pixels in the image itself (e.g. a transparent PNG over a
+  // colored spPr fill) — same fill/line properties a shape carries, since Picture shares
+  // ShapeProperties.
+  applyFill(el, picture.properties.fill, scheme);
+  applyLine(el, picture.properties.line, scheme);
   const blob = new Blob([new Uint8Array(picture.image.data)], { type: picture.image.contentType });
   el.src = URL.createObjectURL(blob);
   return el;
@@ -122,7 +134,7 @@ function renderGraphicFrame(
   positionElement(el, map, frame.transform, context);
 
   if (frame.graphic.type === 'table') {
-    el.appendChild(renderTable(doc, frame.graphic));
+    el.appendChild(renderTable(doc, frame.graphic, context));
   } else {
     const placeholder = doc.createElement('div');
     placeholder.className = 'pptx-graphic-placeholder';

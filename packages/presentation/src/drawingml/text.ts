@@ -45,6 +45,13 @@ export interface ParagraphProperties {
   readonly alignment?: TextAlignment;
   /** Outline/indent level, 0-based. */
   readonly level?: number;
+  /**
+   * Default run formatting for this paragraph (a:pPr's defRPr child) — falls back for any run
+   * in the paragraph that doesn't specify a given field itself. Distinct from `TextListStyle`,
+   * which supplies the *paragraph's own* per-level default before this one is layered on top;
+   * see `to-html5`'s `text-style.ts` for the full run-property inheritance chain.
+   */
+  readonly defaultRunProperties?: RunProperties;
 }
 
 export interface Paragraph {
@@ -58,8 +65,21 @@ export interface TextBodyProperties {
   readonly anchor?: TextAnchor;
 }
 
+/**
+ * Per-outline-level default run properties (§21.1.2.4.12, a:lstStyle's lvl1pPr..lvl9pPr — only
+ * each level's defRPr is modeled; the paragraph-level properties a level can also carry, like
+ * indent, are unmodeled for the skeleton). Indexed 0-based, the same as
+ * `ParagraphProperties.level`: `levels[0]` is level 1's defaults, etc. A shape's txBody
+ * (`TextBody.listStyle`) and a slide master's title/body/other styles (`SlideMaster.textStyles`)
+ * and the presentation's own default (`Presentation.defaultTextStyle`) are all this same shape.
+ */
+export interface TextListStyle {
+  readonly levels: readonly (RunProperties | undefined)[];
+}
+
 /** A shape's or table cell's text content (§21.1.2.1.5, txBody). */
 export interface TextBody {
   readonly properties?: TextBodyProperties;
+  readonly listStyle?: TextListStyle;
   readonly paragraphs: readonly Paragraph[];
 }

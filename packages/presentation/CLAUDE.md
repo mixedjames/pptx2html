@@ -10,9 +10,11 @@ presentation-specific parts).
 
 The type graph is complete enough that `@pptx2html/reader` parses real `.pptx`
 byte streams into it end-to-end (see `packages/reader/CLAUDE.md`), and
-`@pptx2html/to-html5` renders the result into a laid-out HTML5 DOM (layout only,
-no visual formatting yet — see `packages/to-html5/CLAUDE.md`). `tsc -b`, `eslint`,
-`vitest run` and `prettier --check` are all green.
+`@pptx2html/to-html5` renders the result into a laid-out HTML5 DOM with a first
+formatting pass (font inheritance — typeface/size/bold/italic/underline/strike/color;
+everything else, e.g. shape fill/line, is still unformatted — see
+`packages/to-html5/CLAUDE.md`). `tsc -b`, `eslint`, `vitest run` and `prettier --check`
+are all green.
 
 ## Key design decision: resolved object graph, not relationship IDs
 
@@ -66,9 +68,15 @@ code (search for "unmodeled for the skeleton"):
   `shape-tree.ts` only preserves which of the three it is.
 - Bullet/numbering in paragraph properties.
 - Text autofit in `TextBodyProperties`.
-- Theme overrides at the slide/layout level (color/font map overrides).
-- Custom shows and default text styles on the root `Presentation`.
+- Theme overrides at the slide/layout level (color/font map overrides) — `to-html5`'s colour
+  resolution assumes the default clrMap (bg1→lt1, tx1→dk1, bg2→lt2, tx2→dk2).
+- Custom shows on the root `Presentation`.
 - Path gradients (only linear-angle gradients are modeled in `GradientFill`).
+- Non-font-related paragraph properties in a `TextListStyle` level (indent, bullet/numbering) —
+  only each level's `defRPr` (character formatting) is modeled, since that's what `to-html5`'s
+  font-inheritance pass needs. `TextListStyle` (`drawingml/text.ts`) backs `TextBody.listStyle`,
+  `SlideMaster.textStyles` (title/body/other) and `Presentation.defaultTextStyle` alike — see
+  `to-html5/CLAUDE.md`'s font-inheritance design decision for how a consumer walks all three.
 
 **Rule for extending this**: if the reader needs to surface one of these, add the
 type here first, then implement the parser in `packages/reader`. Don't let the
@@ -78,8 +86,9 @@ avoiding.
 
 ## Next likely steps
 
-1. Pick one item off the unmodeled list above based on what `@pptx2html/to-html5`'s
-   formatting pass actually needs next (fill/line/color and run-level text styling
-   are the most likely to visibly matter first — see that package's CLAUDE.md).
+1. Font inheritance (run-level character formatting) is done; shape `fill`/`line`,
+   `Background`, and paragraph alignment are the next things `@pptx2html/to-html5`'s
+   formatting pass needs — none of them require new types here, `ShapeProperties.fill`/`.line`
+   and `Background` already exist (see that package's CLAUDE.md).
 2. Custom geometry path data and bullet/numbering are the two remaining layout
    (not just formatting) gaps most likely to visibly matter.

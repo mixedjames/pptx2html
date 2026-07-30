@@ -23,8 +23,10 @@ function ownTransform(node: ShapeTreeNode): Transform2D | undefined {
  * producers actually rely on: an exact type+index match wins, then any index match, then any
  * type match. Equivalence groups the spec allows (e.g. title vs. ctrTitle) are not modeled —
  * real decks reliably reuse the same type across slide/layout/master for a given placeholder.
+ * Exported for reuse by `text-style.ts`, which walks the same layout/master chain to resolve a
+ * placeholder shape's inherited *font* properties, not just its transform.
  */
-function findPlaceholderMatch(
+export function findPlaceholderMatch(
   placeholder: Placeholder,
   candidates: readonly ShapeTreeNode[],
 ): ShapeTreeNode | undefined {
