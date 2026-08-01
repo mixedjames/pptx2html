@@ -1,6 +1,7 @@
 import type {
   ColorScheme,
   ConnectionShape,
+  CoordinateMap,
   Emu,
   Fill,
   FormatScheme,
@@ -16,12 +17,17 @@ import type {
   SlideLayout,
   Transform2D,
 } from '@pptx2html/presentation';
-import { type CoordinateMap, composeGroupMap, computeBox } from './coordinate.js';
+import {
+  composeGroupMap,
+  computeBox,
+  resolveInheritedTransform,
+  resolveStyleFill,
+  resolveStyleLine,
+} from '@pptx2html/presentation';
+
 import { applyFill, applyLine, applySvgFill, applySvgLine } from './fill.js';
-import { resolveInheritedTransform } from './placeholder.js';
 import type { RenderContext } from './render-context.js';
 import { nativeBorderRadius, presetShapePath } from './shape-geometry.js';
-import { resolveStyleFill, resolveStyleLine } from './style-matrix.js';
 import { renderTable } from './table.js';
 import { renderTextBody } from './text.js';
 

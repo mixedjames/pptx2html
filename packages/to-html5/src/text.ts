@@ -8,17 +8,18 @@ import type {
   TextBody,
   TextRunElement,
 } from '@pptx2html/presentation';
-
-import { formatAutoNumber, NumberingState } from './bullet.js';
-import { resolveColor, resolveFillColor } from './color.js';
-import type { RenderContext } from './render-context.js';
 import {
+  formatAutoNumber,
+  NumberingState,
   resolveEffectiveAlignment,
   resolveEffectiveBullet,
   resolveEffectiveIndent,
   resolveEffectiveRunProperties,
   resolveTypeface,
-} from './text-style.js';
+} from '@pptx2html/presentation';
+
+import { resolveColor, resolveFillColor } from './color.js';
+import type { RenderContext } from './render-context.js';
 import { emuToCqw, fontSizeToEmu } from './units.js';
 
 /**

@@ -14,17 +14,19 @@ document.body.appendChild(el);
 
 Every slide and shape lands in the right place at the right size, including placeholder shapes
 that inherit their position from the slide layout/master rather than declaring their own (very
-common in real decks — see `placeholder.ts`). Run-level character formatting (typeface, size,
+common in real decks — see `@pptx2html/presentation`'s `resolve/placeholder.ts`). Run-level
+character formatting (typeface, size,
 bold, italic, underline, strikethrough, text colour), paragraph alignment, and bulleted/numbered
 lists all render, fully resolved through the same OOXML text-property inheritance chain —
 run/paragraph → shape → placeholder layout/master → master's title/body/other style →
 presentation default → (fonts and bullet glyphs only) theme font scheme (see "Key design
-decision: font/alignment/bullet inheritance chain" below). Shape/picture `fill`/`.line`
+decision: font/alignment/bullet inheritance is applied eagerly" below). Shape/picture `fill`/`.line`
 (§20.1.2.2.35's spPr) also render, as CSS background/border (`fill.ts`) — solid fills, linear
 gradients, and (approximated) patterns/images for fill; solid-colored, dashed/dotted/double
 borders for line. When a shape/picture has **no** explicit `spPr` fill/line of its own —
 PowerPoint's Shape Styles gallery writes shapes exactly this way, via a bare `p:style`
-`fillRef`/`lnRef` — `style-matrix.ts` resolves that reference against the theme's format-scheme
+`fillRef`/`lnRef` — `@pptx2html/presentation`'s `resolve/style-matrix.ts` resolves that reference
+against the theme's format-scheme
 style matrix instead, so such a shape isn't left with no fill/border at all (see "Key design
 decision: style-matrix (`p:style`) resolution" below). A shape/picture's own preset outline
 (§20.1.9.18, `a:prstGeom`) now shapes that fill/line too, for a common subset of presets
@@ -32,7 +34,8 @@ decision: style-matrix (`p:style`) resolution" below). A shape/picture's own pre
 fill/line fidelity, including gradients/patterns/images), and nine further presets (triangle,
 right triangle, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon, 5-point star) via a
 real SVG `<path>` outline (solid fill/stroke only — see the scope boundary). A slide's own
-background renders too, falling back through layout then master (`background.ts`), reusing the
+background renders too, falling back through layout then master (`@pptx2html/presentation`'s
+`resolve/background.ts`), reusing the
 same `fill.ts` machinery. Every absolute magnitude this pass introduces — font size, border width,
 list indentation — scales with the slide via CSS container query units rather than a fixed px/pt
 (see "Key design decision: absolute sizes scale via `cqw`" below), consistent with how
@@ -41,18 +44,21 @@ deliberately deferred to a later pass.
 
 ## Layout
 
+**Note**: the OOXML inheritance-walking logic this section used to describe here —
+`coordinate.ts` (`CoordinateMap`/`composeGroupMap`/`computeBox`/`ElementBox`), `text-style.ts`
+(the font/alignment/bullet/indent chain), `placeholder.ts` (`resolveInheritedTransform`),
+`background.ts` (`resolveEffectiveBackground`), `bullet.ts` (`formatAutoNumber`/`NumberingState`)
+and `style-matrix.ts` (`resolveStyleFill`/`resolveStyleLine`) — has moved to
+`packages/presentation/src/resolve/` (same filenames), since none of it actually renders anything;
+see that package's CLAUDE.md for what's there now and why. This package now only _calls_ it and
+turns the result into DOM/CSS/SVG — the entries below cover what's left here.
+
 - `units.ts` — `EMU_PER_PX` (9525, i.e. 96 CSS px/inch) and `emuToPx`, exported for consumers but
   no longer used internally (see the percentage-based-layout design decision). `EMU_PER_PT`
   (12700) and `fontSizeToEmu` convert a run's `FontSize` (hundredths of a point) to EMU.
   `emuToCqw(emu, slideWidth)` expresses any EMU magnitude as a percentage of the slide's own
   width, suffixed `cqw` (CSS container query width units) instead of a fixed px/pt — see the
   `cqw` design decision below.
-- `coordinate.ts` — pure math, no DOM, fully unit-testable in Node: `CoordinateMap` (an affine
-  translate+scale from a local EMU space to the slide's root EMU space), `IDENTITY_MAP`,
-  `composeGroupMap` (extends a map with a group's own transform so its children's transforms —
-  expressed against `chOff`/`chExt`, §20.1.7.6 — resolve correctly), `computeBox` (map + a
-  `Transform2D` → slide-relative offset/extents, **still in EMU**, plus rotation/flip — converting
-  to a CSS unit is left to the caller, see below).
 - `text.ts` / `table.ts` — pure content renderers (`TextBody` → `<div><p>…</p></div>`,
   `Table` → `<table>`), no absolute positioning of their own; a paragraph is `<p>` with its
   effective `alignment` applied as `text-align` (`distributed` approximated via
@@ -65,31 +71,14 @@ deliberately deferred to a later pass.
   `<col>` widths and `<tr>` heights expressed as a percentage of the column-width/row-height
   totals (so column proportions survive scaling; row-height percentages are best-effort —
   browsers that ignore them just size rows by content instead).
-- `text-style.ts` — pure logic, no DOM: `levelChain` (private) collects a paragraph's outline
-  level from every rung of the list-style inheritance chain (see the design decision below) as an
-  ordered array of `TextListStyleLevel`s; `resolveEffectiveRunProperties` merges each level's
-  `runProperties` field-by-field into one `RunProperties`; `resolveEffectiveAlignment`,
-  `resolveEffectiveBullet` and `resolveEffectiveIndent` all instead use the shared `resolveScalar`
-  helper — "first (highest-priority) defined wins" rather than a field-by-field merge, since each
-  is one paragraph-level value (or, for a bullet, one whole tagged-union value — a `CharBullet`
-  and an `AutoNumberBullet` aren't merged together) rather than a set of independent fields.
-  `resolveTypeface` resolves a `+mj-lt`/`+mn-lt`/etc. theme font token against a `FontScheme`,
-  passing any literal font name straight through.
-- `bullet.ts` — pure logic, no DOM: `formatAutoNumber(n, scheme)` renders a 1-based ordinal as its
-  scheme's label (`"3."`, `"c)"`, `"iv."`, etc. — ten `AutoNumberScheme`s covering arabic/alpha/
-  roman numerals crossed with period/right-paren suffixes). `NumberingState` tracks the running
-  counter per outline level as `renderTextBody` walks a text body's paragraphs in order — this is
-  the one piece of list rendering that's inherently stateful across paragraphs (unlike
-  alignment/bullet-glyph resolution, which `text-style.ts` resolves independently per paragraph),
-  since a number depends on how many auto-numbered siblings at the same level came before it; see
-  the design decision below for its restart/continue rules.
-- `color.ts` — pure logic, no DOM: `resolveColor` turns a DrawingML `Color` (srgb/scheme/system/
-  preset/hsl, plus its `ColorTransform` modifiers — lumMod/lumOff/shade/tint/satMod/hueMod/alpha)
-  into a CSS colour string; `resolveFillColor` is the `Fill`-level wrapper for the common
-  single-colour case (only `SolidFill` resolves to a colour — gradient/pattern/blip fills need
-  more than one CSS colour), used for both run text colour (`text.ts`) and a shape's `line`
-  colour (`fill.ts`). Scheme colour resolution assumes the default clrMap (bg1→lt1, tx1→dk1,
-  bg2→lt2, tx2→dk2), since slide/layout clrMap overrides are unmodeled in `packages/presentation`.
+- `color.ts` — a thin CSS-formatting wrapper (unlike its former self, see the Layout note above):
+  `resolveColor`/`resolveFillColor` keep their old signatures and CSS-string return type exactly
+  (nothing downstream needed to change), but internally just call `@pptx2html/presentation`'s
+  `resolveColor`/`resolveFillColor` (aliased on import to `resolveColorComponents`/
+  `resolveFillColorComponents` to avoid shadowing) and format the resulting `ResolvedColor` —
+  `rgbToCss` (unchanged) plus a `toCss` adapter for the `{ type: 'preset' }` case, which just
+  passes the preset name through as-is (DrawingML preset names match CSS's extended colour
+  keywords almost 1:1).
 - `fill.ts` — DOM-touching (unlike `color.ts`): `applyFill` sets a shape/picture's CSS
   `background-color`/`background-image` from its `ShapeProperties.fill`, and `applyLine` sets
   `border-width`/`-style`/`-color` from its `ShapeProperties.line` (`border-width` in `cqw` via
@@ -127,43 +116,28 @@ deliberately deferred to a later pass.
   per-preset default chosen to look reasonable — not transcribed from the spec's own `<gdLst>`
   formulas, so not guaranteed bit-exact; same approximation tier as this package's other
   best-effort stand-ins (pattern fills, colour-transform ordering).
-- `style-matrix.ts` — pure logic, no DOM: `resolveStyleFill`/`resolveStyleLine` resolve a shape's
-  `p:style/fillRef`/`lnRef` (`StyleMatrixReference`, `packages/presentation`'s `shape-style.ts`)
-  against the theme's `FormatScheme.fillStyles`/`.lineStyles` (1-based `index`), substituting the
-  reference's own `color` for every `phClr` ("placeholder colour") scheme-colour reference found
-  anywhere inside the resolved Fill/Line — recursively, so it reaches every gradient stop and a
-  pattern's fore/background colour, not just a top-level solid fill. The substitution merges the
-  style entry's own local colour transforms (e.g. the theme's fillStyleLst commonly stacks
-  `tint`/`lumMod` on its `phClr` entries) underneath whatever transforms the reference's own colour
-  carries (rare in practice) — a flat-field merge, not a spec-accurate ordered composition of two
-  transform stacks, the same approximation tier `color.ts`'s own colour-transform doc comment
-  already documents elsewhere in this package. Returns `undefined` for a missing reference, missing
-  theme, or an out-of-range index — the caller (`shape-tree.ts`) only reaches for this when the
-  shape has no explicit `spPr` fill/line of its own, see the design decision below.
-- `placeholder.ts` — pure logic, no DOM: `resolveInheritedTransform` walks the OOXML placeholder
-  inheritance chain (§19.3.1.36) — slide placeholder → matching layout placeholder (by
-  type+index, falling back to index-only then type-only) → matching master placeholder, same
-  rule — and returns the first transform found. `shape`/`picture`/`connector` almost always rely
-  on this: real decks routinely omit `xfrm` on placeholder shapes entirely.
-- `render-context.ts` — `RenderContext { slideSize, layout, defaultTextStyle }`, threaded
-  alongside `CoordinateMap` through every `renderShapeTreeNode` call. Unlike the map (which
-  changes at every group nesting level), this is constant for the whole slide — `slideSize` is
-  what every element's EMU box gets divided by to become a percentage, `layout` is for
-  placeholder transform _and_ font resolution (via `layout.master`), `defaultTextStyle` is the
-  presentation's own `p:defaultTextStyle`, the bottom rung of the font inheritance chain.
+- `render-context.ts` — `RenderContext`, threaded alongside `CoordinateMap` (now
+  `@pptx2html/presentation`'s) through every `renderShapeTreeNode` call. It `extends`
+  `@pptx2html/presentation`'s `TextStyleContext` (`layout`/`defaultTextStyle` — the two pieces
+  the moved text-style/placeholder resolvers need) rather than redeclaring those fields, adding
+  only `slideSize` — the one field that's genuinely this renderer's own (every element's EMU box
+  gets divided by it to become a percentage). Because `RenderContext` structurally satisfies
+  `TextStyleContext`, every call site that already passes its full `context` to a
+  `@pptx2html/presentation` resolver keeps compiling unchanged.
 - `shape-tree.ts` — `renderShapeTreeNode`, the one recursive dispatcher over `ShapeTreeNode`'s
   five kinds. `shape`/`picture`/`connector` position from their own transform if they have one,
-  else from `resolveInheritedTransform`; `graphicFrame` always has its own transform (mandatory in
-  the schema) so it skips that path. All four get positioned by `positionElement`, which converts
-  `computeBox`'s EMU box to `left`/`top`/`width`/`height` **percentages of `context.slideSize`**
-  and also sets `box-sizing: border-box` — OOXML sizes a shape's outline _within_ its bounding box
-  (§20.1.2.2.24), not outside it, matching CSS's `border-box` rather than the default `content-box`
-  (which would render a bordered shape larger than its declared width/height by the border's own
-  width). `renderShape`/`renderPicture` also call `fill.ts`'s `applyFill`/`applyLine` — but not with
-  `ShapeProperties.fill`/`.line` directly; both first go through `effectiveFill`/`effectiveLine`
-  (the shape's own `spPr` fill/line if it has one, else its `p:style/fillRef`/`lnRef` resolved via
-  `style-matrix.ts`'s `resolveStyleFill`/`resolveStyleLine` against `context.layout?.master.theme`'s
-  `formatScheme` — see the design decision below). A picture's fill shows through any transparent
+  else from `@pptx2html/presentation`'s `resolveInheritedTransform`; `graphicFrame` always has its
+  own transform (mandatory in the schema) so it skips that path. All four get positioned by
+  `positionElement`, which converts `computeBox`'s EMU box to `left`/`top`/`width`/`height`
+  **percentages of `context.slideSize`** and also sets `box-sizing: border-box` — OOXML sizes a
+  shape's outline _within_ its bounding box (§20.1.2.2.24), not outside it, matching CSS's
+  `border-box` rather than the default `content-box` (which would render a bordered shape larger
+  than its declared width/height by the border's own width). `renderShape`/`renderPicture` also
+  call `fill.ts`'s `applyFill`/`applyLine` — but not with `ShapeProperties.fill`/`.line` directly;
+  both first go through `effectiveFill`/`effectiveLine` (the shape's own `spPr` fill/line if it has
+  one, else its `p:style/fillRef`/`lnRef` resolved via `@pptx2html/presentation`'s
+  `resolveStyleFill`/`resolveStyleLine` against `context.layout?.master.theme`'s `formatScheme` —
+  see the design decision below). A picture's fill shows through any transparent
   pixels in the image itself, since `Picture` shares `ShapeProperties` with `Shape` — `renderConnector`
   doesn't call either yet, see the scope boundary below. Before doing that, `renderShape` first checks
   `shape-geometry.ts`'s `presetShapePath` against the shape's own `geometry`: if it returns a path
@@ -185,16 +159,13 @@ deliberately deferred to a later pass.
   containing block to resolve against; stretching every nesting level to exactly the slide's size
   is what makes a doubly-nested child's percentage position still resolve correctly (see the
   design decision below).
-- `background.ts` — pure logic, no DOM: `resolveEffectiveBackground` picks a slide's own
-  background if it has one, else its layout's, else the layout's master's — the first one found
-  wins outright (unlike the font/transform chains above, a background isn't merged field-by-field,
-  since `Background` is just a single `Fill`).
 - `slide.ts` — `renderSlide`: one `.pptx-slide` div, `position: relative; overflow: hidden`,
   `width: 100%` with `aspect-ratio: <slideWidth> / <slideHeight>` (raw EMU numbers — `aspect-ratio`
   only cares about the ratio) so it fills whatever width its container gives it and its height
   follows automatically, plus `container-type: inline-size` so descendants can size themselves in
   `cqw` against _this_ element's own rendered width (see the `cqw` design decision below). Applies
-  `resolveEffectiveBackground`'s result via `fill.ts`'s `applyFill` directly on the slide div,
+  `@pptx2html/presentation`'s `resolveEffectiveBackground` result via `fill.ts`'s `applyFill`
+  directly on the slide div,
   before its `shapeTree` (walked from `IDENTITY_MAP` with a `RenderContext` built from
   `slide.layout`, the passed-in `slideSize`, and an optional `defaultTextStyle` — the
   presentation's `p:defaultTextStyle`, passed down from `presentation-element.ts` since
@@ -231,16 +202,17 @@ which wrapper it's actually nested inside.
 
 A shape's position could instead be built from nested `<div>`s each carrying a CSS
 `transform: translate(...) scale(...)` mirroring its OOXML group transform, rather than the
-percentage scheme above. We didn't do that — `composeGroupMap` walks the ancestor chain in EMU
-space and every leaf element gets one final `left`/`top`/`width`/`height` (as a percentage, see
-above), already relative to the slide. This makes each element's box independently readable from
-its own inline styles (useful for debugging and for a future formatting pass) without having to
-account for inherited CSS transforms. The one thing this trades away: **rotation does not compose
-across nested groups** — `computeBox` applies a shape's (or group's) own `rotation`/flip as a CSS
-`transform` around its own box, uncomposed with any ancestor group's rotation. Spec-correct for
-the (common) unrotated-group case; a rotated group with rotated descendants will look wrong.
-Fixing this means switching the rotated subtree to the nested-CSS-transform approach above —
-deliberately not done for this first pass.
+percentage scheme above. We didn't do that — `@pptx2html/presentation`'s `composeGroupMap` walks
+the ancestor chain in EMU space and every leaf element gets one final `left`/`top`/`width`/`height`
+(as a percentage, see above), already relative to the slide. This makes each element's box
+independently readable from its own inline styles (useful for debugging and for a future
+formatting pass) without having to account for inherited CSS transforms. The one thing this trades
+away: **rotation does not compose across nested groups** — `computeBox` returns a shape's (or
+group's) own `rotation`/flip uncomposed with any ancestor group's, in `ElementBox`; applying that
+as a CSS `transform` around the element's own box is still `to-html5`'s own choice (`positionElement`
+in `shape-tree.ts`). Spec-correct for the (common) unrotated-group case; a rotated group with
+rotated descendants will look wrong. Fixing this means switching the rotated subtree to the
+nested-CSS-transform approach above — deliberately not done for this first pass.
 
 ## Key design decision: a shape's style-matrix reference is a whole-value fallback, only reached when spPr has no fill/line at all
 
@@ -252,44 +224,40 @@ whatsoever — this is what real decks look like far more often than an explicit
 manually setting `spPr` XML by hand (as opposed to using the gallery) is the unusual case.
 `effectiveFill`/`effectiveLine` (`shape-tree.ts`) fix this: `shape.properties.fill ??
 resolveStyleFill(shape.style?.fillRef, formatScheme)`, and the `.line` equivalent — the shape's own
-`spPr` value wins outright when present, `style-matrix.ts`'s resolution only runs as a fallback.
-This is a **whole-value** fallback, not a field-level merge (an explicit `spPr` fill entirely
+`spPr` value wins outright when present, `@pptx2html/presentation`'s `resolveStyleFill`/
+`resolveStyleLine` (the substitution logic itself, and its own doc comments, now live there — see
+that package's CLAUDE.md) only runs as a fallback. This is a **whole-value** fallback, not a
+field-level merge (an explicit `spPr` fill entirely
 replaces the style reference, never blends with it) — the same "first defined wins outright"
-simplification `background.ts`'s `resolveEffectiveBackground` already uses for the slide/layout/
-master background chain, chosen for the same reason: real decks essentially never partially
+simplification `@pptx2html/presentation`'s `resolveEffectiveBackground` already uses for the
+slide/layout/master background chain, chosen for the same reason: real decks essentially never
+partially
 override a style reference (a shape either fully relies on its gallery style, or a user manually
 picked its own fill/line, replacing the style reference's fill/line entirely in the UI's own
 model). The resolved fill/line then flows into the same `applyFill`/`applyLine`/preset-geometry
 path an explicit `spPr` fill/line would have — a style-matrix-sourced fill renders identically to
 an equivalent literal one, no separate code path downstream of `effectiveFill`/`effectiveLine`.
 
-## Key design decision: font/alignment/bullet inheritance chain resolved eagerly per run/paragraph, not via CSS cascade
+## Key design decision: font/alignment/bullet inheritance is applied eagerly as inline styles, not via CSS cascade
 
-A run's effective font (or a paragraph's effective alignment/bullet) could instead lean on the
-browser's own CSS cascade — apply each level's style to its own DOM ancestor and let
-`inherit`/unset properties flow down naturally. We didn't do that: `text-style.ts`'s `levelChain`
-walks the whole chain in JS for every paragraph, and `resolveEffectiveRunProperties`/
-`resolveEffectiveAlignment`/`resolveEffectiveBullet`/`resolveEffectiveIndent` write the
-fully-resolved result as that run's/paragraph's own inline styles (mirrors
-`resolveInheritedTransform`'s approach to placeholder position, and the same "every element's box
-independently readable from its own inline styles" rationale as the CoordinateMap decision above).
-The chain, lowest to highest priority: `Presentation.defaultTextStyle` → the slide master's
-title/body/other `TextStyles` (by placeholder category — title/ctrTitle use `titleStyle`, other
-placeholder types `bodyStyle`, non-placeholder shapes `otherStyle`) → the master's own matching
-placeholder shape's `TextBody.listStyle` → the layout's matching placeholder shape's
-`TextBody.listStyle` (mirrors `resolveInheritedTransform`'s layout→master walk, via the same
-`findPlaceholderMatch`, now exported from `placeholder.ts` for this reuse) → the shape's own
-`TextBody.listStyle`. Run properties then layer the paragraph's own `defRPr` and finally the run's
-own `rPr` on top; alignment/bullet/margin/indent instead take the paragraph's own value outright if
-it has one (each a single scalar — or, for bullet, one whole tagged-union value — not a set of
-fields to merge). Each step only supplies defaults for the paragraph's own outline level (0-based,
-`TextListStyleLevel`, indexed via `TextListStyle.levels[level]`). This order is a reasonable
-synthesis of how real-world OOXML renderers describe the (spec-under-specified) inheritance, not a
-verified bit-exact match to PowerPoint. Theme font-scheme resolution (`+mj-lt`/`+mn-lt`/etc. → an
-actual typeface) is a separate, final step (`resolveTypeface`) since it only concerns the
-`typeface` field and needs the theme, not a list style — done in `text.ts` right before the style
-is applied (for both run text and, since a bullet glyph can reference the theme the same way, a
-bullet's own `font`), using `context.layout?.master.theme`.
+The chain itself — `Presentation.defaultTextStyle` → the slide master's title/body/other
+`TextStyles` → the master's/layout's matching placeholder shape's `TextBody.listStyle` → the
+shape's own → the paragraph's own `defRPr`/alignment/bullet/indent → the run's own `rPr` — is
+`@pptx2html/presentation`'s `resolve/text-style.ts` now, see that package's CLAUDE.md for the
+exact rung-by-rung order and reasoning. What's still `to-html5`'s own choice is _how_ the result
+gets applied: a run's effective font (or a paragraph's effective alignment/bullet) could instead
+lean on the browser's own CSS cascade — apply each level's style to its own DOM ancestor and let
+`inherit`/unset properties flow down naturally. We didn't do that — `text.ts` calls
+`resolveEffectiveRunProperties`/`resolveEffectiveAlignment`/`resolveEffectiveBullet`/
+`resolveEffectiveIndent` once per run/paragraph and writes the fully-resolved result as that
+element's own inline styles (mirrors `resolveInheritedTransform`'s approach to placeholder
+position, and the same "every element's box independently readable from its own inline styles"
+rationale as the `CoordinateMap` decision above). Theme font-scheme resolution (`+mj-lt`/`+mn-lt`/
+etc. → an actual typeface) is a separate, final step (`resolveTypeface`, also
+`@pptx2html/presentation`'s) since it only concerns the `typeface` field and needs the theme, not a
+list style — called from `text.ts` right before the style is applied (for both run text and, since
+a bullet glyph can reference the theme the same way, a bullet's own `font`), using
+`context.layout?.master.theme`.
 
 ## Key design decision: bullets render as an explicit queryable `<span>`, not a CSS `::before`
 
@@ -302,12 +270,14 @@ is, and OOXML paragraphs don't actually nest into `<li>`s the way HTML lists do 
 just a run of sibling paragraphs that happen to share an outline level and an auto-number scheme,
 which can be interrupted by a non-bulleted paragraph or a different level at any point (unlike an
 HTML `<ol>`, which is a single element the whole list lives inside). So `text.ts` prepends a real
-`<span class="pptx-bullet">` (the glyph or `bullet.ts`'s formatted number) plus a space, as the
+`<span class="pptx-bullet">` (the glyph or `@pptx2html/presentation`'s `formatAutoNumber`'s
+formatted number) plus a space, as the
 first children of the paragraph's own `<p>` — styled from the bullet's own `font`/`color`/
 `sizePercent` overrides, falling back to the paragraph's "ambient" run properties (an empty run
 resolved through the ordinary `resolveEffectiveRunProperties` chain) for anything unset, since a
 bullet with no override of its own inherits the character formatting of the text it precedes.
-Numbering itself (`bullet.ts`'s `NumberingState`) is the one genuinely stateful piece — `renderTextBody`
+Numbering itself (`@pptx2html/presentation`'s `NumberingState`) is the one genuinely stateful
+piece — `renderTextBody`
 holds one `NumberingState` per text body and walks paragraphs in order, since each auto-numbered
 label depends on how many same-level, same-scheme siblings came before it. Its restart rules
 (chosen to match how PowerPoint's own outline numbering behaves, not spec-mandated): a paragraph
@@ -355,14 +325,15 @@ properties' values; see their `NOTE` comments and the Tests section below.
 ## Scope boundary — what's intentionally unmodeled (yet)
 
 - **Run-level font colour only resolves solid fills.** `RunProperties.fill` can technically be a
-  gradient/pattern/blip `Fill` (WordArt-style text); `color.ts`'s `resolveFillColor` only handles
-  `SolidFill`, falling back to no colour (inherits black) for the others — vanishingly rare on
-  plain text runs in real decks.
-- **Colour transforms on preset colours are ignored.** `color.ts` has no RGB table for the ~140
-  DrawingML preset names (they map almost 1:1 to CSS's extended colour keywords, so untransformed
-  presets pass straight through as CSS keywords) — a `shade`/`tint`/etc. stacked on a preset colour
-  is silently dropped. Transforms are almost always applied to scheme colours in practice, not
-  presets, so this is a narrow gap.
+  gradient/pattern/blip `Fill` (WordArt-style text); `@pptx2html/presentation`'s `resolveFillColor`
+  only handles `SolidFill`, falling back to no colour (inherits black) for the others — vanishingly
+  rare on plain text runs in real decks.
+- **Colour transforms on preset colours are ignored.** `@pptx2html/presentation`'s `resolve/color.ts`
+  has no RGB table for the ~140 DrawingML preset names (they map almost 1:1 to CSS's extended
+  colour keywords, so untransformed presets pass straight through as an opaque name — `to-html5`'s
+  own (now much thinner) `color.ts` hands it to CSS as-is) — a `shade`/`tint`/etc. stacked on a
+  preset colour is silently dropped. Transforms are almost always applied to scheme colours in
+  practice, not presets, so this is a narrow gap.
 - **`ShapeProperties.geometry` is rendered for a common subset of presets only.**
   `shape-geometry.ts` covers twelve presets total: `rect` (the pre-existing default), `roundRect`
   and `ellipse` (native `border-radius`), and nine more via a real SVG outline (triangle,
@@ -381,7 +352,8 @@ properties' values; see their `NOTE` comments and the Tests section below.
   preset's real outline, since that would need an `<svg><image>` + `<clipPath>` overlay rather than
   the plain `border-radius` an `<img>` supports directly; deferred since `rect`/`roundRect`/
   `ellipse` covers the overwhelming majority of real picture crops.
-- **Style-matrix resolution (`style-matrix.ts`) only covers `fillRef`/`lnRef`.** `effectRef`
+- **Style-matrix resolution (`@pptx2html/presentation`'s `resolve/style-matrix.ts`) only covers
+  `fillRef`/`lnRef`.** `effectRef`
   (a shape's effect style, e.g. shadow) and `fontRef` (its default text colour when a run doesn't
   set one) are unmodeled, matching `ShapeStyle`'s own scope in `packages/presentation` — neither
   effect rendering nor a fontRef-colour text fallback exist yet. `renderConnector` doesn't call
@@ -389,9 +361,9 @@ properties' values; see their `NOTE` comments and the Tests section below.
   connectors below), so a connector's own `p:style` (parsed, since `ShapeStyle` is on
   `ConnectionShape` too) currently goes unused. `resolveStyleFill`/`resolveStyleLine`'s `phClr`
   substitution is also a flat-field transform merge, not a spec-accurate ordered composition — see
-  `style-matrix.ts`'s own doc comment.
+  that file's own doc comment.
 - **Pattern fills are only approximated**, and colour transforms on preset colours are ignored —
-  see `fill.ts`'s and `color.ts`'s own doc comments for why. The hatch overlay's own spacing
+  see `fill.ts`'s and `@pptx2html/presentation`'s `resolve/color.ts`'s own doc comments for why. The hatch overlay's own spacing
   (`2px`/`8px` in the `repeating-linear-gradient`) is also a fixed px, not `cqw` — it's a purely
   decorative stand-in already, not a real DrawingML magnitude, so it wasn't brought into the `cqw`
   pass below.
@@ -409,7 +381,7 @@ properties' values; see their `NOTE` comments and the Tests section below.
   styles. The DOM structure exists (`.pptx-shape`, `.pptx-paragraph`, `.pptx-run`, etc.) precisely
   so a later pass can add CSS without restructuring.
 - **Placeholder inheritance is supported, but with a simplified matching rule.** See
-  `placeholder.ts` above. Not modeled: the spec's type-equivalence groups (e.g. a slide's
+  `@pptx2html/presentation`'s `resolve/placeholder.ts`. Not modeled: the spec's type-equivalence groups (e.g. a slide's
   `ctrTitle` placeholder is allowed to match a layout's `title` placeholder) — only exact type
   matches (after the index-match attempts) are tried. Real decks reliably reuse the same
   placeholder type across slide/layout/master, so this covers the common case; a shape can still
@@ -431,21 +403,22 @@ properties' values; see their `NOTE` comments and the Tests section below.
 
 ## Tests
 
-`coordinate.test.ts`, `placeholder.test.ts`, `text-style.test.ts`, `color.test.ts`,
-`background.test.ts`, `units.test.ts`, `bullet.test.ts`, `shape-geometry.test.ts` and
-`style-matrix.test.ts` are pure Node
-(no DOM) and cover the
-affine math, the placeholder transform inheritance chain (layout match, master fallback,
-no-match), the shared `levelChain` walked by the font-property/alignment/bullet/indent
-inheritance resolvers (every rung from `defaultTextStyle` down to a run's own `rPr`/a paragraph's
-own `algn`/bullet/`marL`/`indent`, plus theme font-token
-resolution), DrawingML colour resolution (scheme aliasing, hsl/srgb/system conversion,
-transforms), the slide/layout/master background fallback chain, the EMU→px/pt/cqw conversion
-math, `presetShapePath`/`nativeBorderRadius`'s path/radius output per preset (including the
-`adj`-guide default vs. explicit-override cases and the 50%-cap edge case for `roundRect`/
-parallelogram/trapezoid/hexagon/octagon), and `resolveStyleFill`/`resolveStyleLine`'s `phClr`
-substitution (a top-level solid fill, every gradient stop, a pattern's fore/background colour, the
-local-transform-merge case, an out-of-range index, and a missing reference/format-scheme), directly.
+The inheritance-resolution tests that used to live here (`coordinate.test.ts`,
+`placeholder.test.ts`, `text-style.test.ts`, `background.test.ts`, `bullet.test.ts`,
+`style-matrix.test.ts`) moved to `packages/presentation/src/resolve/` alongside the source they
+test — see that package's CLAUDE.md for what they cover now. `shape-geometry.test.ts` and
+`units.test.ts` are the remaining pure-Node (no DOM) test files here, covering
+`presetShapePath`/`nativeBorderRadius`'s path/radius output per preset (including the `adj`-guide
+default vs. explicit-override cases and the 50%-cap edge case for `roundRect`/parallelogram/
+trapezoid/hexagon/octagon) and the EMU→px/pt/cqw conversion math, directly.
+
+`color.test.ts` is a `happy-dom`-free integration check of a different kind: it stayed in this
+package (unlike its former `color.ts` self, see the Layout note above) because it still exercises
+something genuinely `to-html5`'s own — `resolveColor`/`resolveFillColor`'s CSS-string output — and
+it kept passing completely unchanged through the `color.ts` split, since that split preserved
+their public signature and behaviour exactly. `packages/presentation/src/resolve/color.test.ts` is
+the new, separate test for the pure `ResolvedColor`-returning resolver the CSS wrapper now calls.
+
 Everything else that touches the DOM (`slide.test.ts`, `table.test.ts`,
 `text.test.ts`, `fill.test.ts`, `shape-tree.test.ts`, `presentation-element.test.ts`) opts into
 `happy-dom` per-file via a
@@ -486,9 +459,8 @@ across sibling paragraphs, a nested sub-list restarting and the outer list resum
 after, an explicit `buNone` suppressing a bullet inherited from the shape's own list style, the
 ambient-run-property colour fallback when a bullet has no colour of its own, and a trailing/
 interior empty paragraph getting no bullet and neither consuming a number nor breaking a running
-numbered list — `bullet.test.ts` covers `formatAutoNumber`'s ten schemes (including the alpha
-scheme's z→aa wraparound and a `1994` roman-numeral case) and `NumberingState`'s
-continue/restart/break rules directly, DOM-free.
+numbered list — `formatAutoNumber`'s ten schemes and `NumberingState`'s continue/restart/break
+rules are covered directly, DOM-free, by `packages/presentation/src/resolve/bullet.test.ts`.
 
 **Known test-environment gap**: `text.test.ts` and `fill.test.ts` can't assert on the actual
 `style.fontSize`/`style.borderWidth`/`style.paddingLeft`/`style.textIndent`/`style.strokeWidth`
@@ -519,8 +491,8 @@ decision above). Both files have a `NOTE` comment at the point this bites; the a
 6. `p:style/effectRef` and `fontRef` (see the scope boundary above) — `effectRef` needs effect
    rendering to exist at all first (a bigger, separate gap); `fontRef` is a smaller, self-contained
    addition — a run/paragraph with no resolved colour of its own could fall back to its shape's
-   `fontRef`'s colour before defaulting to black, in `text-style.ts`'s
-   `resolveEffectiveRunProperties` chain.
+   `fontRef`'s colour before defaulting to black, in `@pptx2html/presentation`'s
+   `resolveEffectiveRunProperties` chain (`resolve/text-style.ts`).
 7. Wiring a connector's own `p:style` (already parsed, `ShapeStyle` is on `ConnectionShape` too)
    into whatever connector line rendering eventually lands (see item 2 above) — today it's parsed
    but unused, since `renderConnector` doesn't call `applyFill`/`applyLine`/`effectiveFill`/

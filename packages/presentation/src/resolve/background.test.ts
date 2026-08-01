@@ -1,4 +1,4 @@
-import type { Background, Slide, SlideLayout, SlideMaster } from '@pptx2html/presentation';
+import type { Background, Slide, SlideLayout, SlideMaster } from '../index.js';
 import { describe, expect, it } from 'vitest';
 import { resolveEffectiveBackground } from './background.js';
 

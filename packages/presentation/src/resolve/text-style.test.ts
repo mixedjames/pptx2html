@@ -7,13 +7,13 @@ import type {
   SlideMaster,
   TextBody,
   TextRunElement,
-} from '@pptx2html/presentation';
+} from '../index.js';
 import { describe, expect, it } from 'vitest';
-import type { RenderContext } from './render-context.js';
 import {
   resolveEffectiveAlignment,
   resolveEffectiveRunProperties,
   resolveTypeface,
+  type TextStyleContext,
 } from './text-style.js';
 
 function placeholderShape(
@@ -49,10 +49,9 @@ function layout(shapes: readonly Shape[], masterShapes: readonly Shape[] = []): 
 
 function contextFor(
   layoutValue: SlideLayout | undefined,
-  defaultTextStyle?: RenderContext['defaultTextStyle'],
-): RenderContext {
+  defaultTextStyle?: TextStyleContext['defaultTextStyle'],
+): TextStyleContext {
   return {
-    slideSize: { width: 1, height: 1 },
     layout: layoutValue,
     defaultTextStyle,
   };

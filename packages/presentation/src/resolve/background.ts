@@ -1,4 +1,4 @@
-import type { Background, Slide } from '@pptx2html/presentation';
+import type { Background, Slide } from '../presentationml/index.js';
 
 /**
  * Resolves a slide's effective background (§19.3.1.7, p:bg): the slide's own, falling back to

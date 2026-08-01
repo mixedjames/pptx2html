@@ -134,6 +134,22 @@ const SLIDE_XML = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       </p:pic>
     </p:spTree>
   </p:cSld>
+  <p:timing>
+    <p:tnLst>
+      <p:par>
+        <p:cTn id="1" nodeType="tmRoot">
+          <p:childTnLst>
+            <p:animEffect transition="in" filter="fade">
+              <p:cBhvr>
+                <p:cTn id="2" dur="500"/>
+                <p:tgtEl><p:spTgt spid="2"/></p:tgtEl>
+              </p:cBhvr>
+            </p:animEffect>
+          </p:childTnLst>
+        </p:cTn>
+      </p:par>
+    </p:tnLst>
+  </p:timing>
 </p:sld>`;
 
 const SLIDE_RELS = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -247,6 +263,19 @@ describe('readPresentation (synthetic end-to-end fixture)', () => {
     if (picture?.kind === 'picture') {
       expect(picture.image.data).toEqual(IMAGE_BYTES);
     }
+
+    expect(slide.timing?.timeNodeTree).toMatchObject({
+      kind: 'par',
+      common: { id: 1, role: 'tmRoot' },
+      children: [
+        {
+          kind: 'animEffect',
+          transition: 'in',
+          filter: 'fade',
+          target: { kind: 'shape', shapeId: 2 },
+        },
+      ],
+    });
 
     expect(presentation.notesMaster?.commonSlideData.shapeTree).toEqual([]);
     expect(presentation.notesSlides).toHaveLength(1);

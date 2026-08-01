@@ -1,4 +1,4 @@
-import type { PlaceholderType, Shape, SlideLayout, SlideMaster } from '@pptx2html/presentation';
+import type { PlaceholderType, Shape, SlideLayout, SlideMaster } from '../index.js';
 import { describe, expect, it } from 'vitest';
 import { resolveInheritedTransform } from './placeholder.js';
 

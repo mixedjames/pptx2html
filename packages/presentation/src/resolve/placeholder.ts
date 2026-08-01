@@ -1,4 +1,5 @@
-import type { Placeholder, ShapeTreeNode, SlideLayout, Transform2D } from '@pptx2html/presentation';
+import type { Placeholder, Transform2D } from '../drawingml/index.js';
+import type { ShapeTreeNode, SlideLayout } from '../presentationml/index.js';
 
 /**
  * A node's own transform, for the kinds that can carry a placeholder identity and can therefore

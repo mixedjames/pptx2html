@@ -1,7 +1,6 @@
 import type {
   Bullet,
   Emu,
-  FontScheme,
   Paragraph,
   Placeholder,
   PlaceholderType,
@@ -11,10 +10,22 @@ import type {
   TextListStyle,
   TextListStyleLevel,
   TextRunElement,
-} from '@pptx2html/presentation';
-
+} from '../drawingml/index.js';
+import type { SlideLayout } from '../presentationml/index.js';
+import type { FontScheme } from '../theme.js';
 import { findPlaceholderMatch } from './placeholder.js';
-import type { RenderContext } from './render-context.js';
+
+/**
+ * The two pieces of slide-level context the list-style inheritance chain needs — `layout` (for
+ * the master/layout placeholder walk) and `defaultTextStyle` (the presentation's own
+ * `p:defaultTextStyle`, the chain's bottom rung). A renderer's own per-slide context (e.g.
+ * `@pptx2html/to-html5`'s `RenderContext`, which also carries a `slideSize` that has nothing to do
+ * with text-style resolution) can simply extend this rather than duplicate its fields.
+ */
+export interface TextStyleContext {
+  readonly layout?: SlideLayout;
+  readonly defaultTextStyle?: TextListStyle;
+}
 
 function levelOf(style: TextListStyle | undefined, level: number): TextListStyleLevel | undefined {
   return style?.levels[level];
@@ -54,7 +65,7 @@ function levelChain(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
-  context: RenderContext,
+  context: TextStyleContext,
 ): readonly (TextListStyleLevel | undefined)[] {
   const level = paragraph.properties?.level ?? 0;
   const layout = context.layout;
@@ -122,7 +133,7 @@ export function resolveEffectiveRunProperties(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
-  context: RenderContext,
+  context: TextStyleContext,
 ): RunProperties {
   const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
   return mergeRunProperties(
@@ -161,7 +172,7 @@ export function resolveEffectiveAlignment(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
-  context: RenderContext,
+  context: TextStyleContext,
 ): TextAlignment | undefined {
   const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
   return resolveScalar(paragraph.properties?.alignment, chain, (level) => level.alignment);
@@ -178,7 +189,7 @@ export function resolveEffectiveBullet(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
-  context: RenderContext,
+  context: TextStyleContext,
 ): Bullet | undefined {
   const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
   return resolveScalar(paragraph.properties?.bullet, chain, (level) => level.bullet);
@@ -194,7 +205,7 @@ export function resolveEffectiveIndent(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
-  context: RenderContext,
+  context: TextStyleContext,
 ): { marginLeft: Emu | undefined; indent: Emu | undefined } {
   const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
   return {

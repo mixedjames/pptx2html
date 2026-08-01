@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import type { FormatScheme, Picture, Shape, SlideLayout } from '@pptx2html/presentation';
+import { IDENTITY_MAP } from '@pptx2html/presentation';
 import { describe, expect, it } from 'vitest';
-import { IDENTITY_MAP } from './coordinate.js';
 import type { RenderContext } from './render-context.js';
 import { renderShapeTreeNode } from './shape-tree.js';
 

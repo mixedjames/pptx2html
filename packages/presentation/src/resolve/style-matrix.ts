@@ -1,11 +1,6 @@
-import type {
-  Color,
-  ColorTransform,
-  Fill,
-  FormatScheme,
-  Line,
-  StyleMatrixReference,
-} from '@pptx2html/presentation';
+import type { Color, ColorTransform, Fill, Line } from '../drawingml/index.js';
+import type { FormatScheme } from '../theme.js';
+import type { StyleMatrixReference } from '../presentationml/index.js';
 
 function mergeTransforms(
   base: ColorTransform | undefined,
@@ -57,9 +52,9 @@ function substituteFill(fill: Fill, replacement: Color): Fill {
  * Resolves a shape's `p:style/fillRef` (§20.1.4.2.10) against the theme's format-scheme fill style
  * matrix — the 1-based `index` selects `FormatScheme.fillStyles`, and the reference's own `color`
  * substitutes for that style's `phClr` placeholder(s), see `substitutePlaceholder`. `undefined` if
- * there's no reference, no theme, or the index is out of range — the caller (`shape-tree.ts`)
- * falls back to the shape's own `spPr` fill either way, so this only matters for a shape that omits
- * one (PowerPoint's Shape Styles gallery writes shapes exactly this way).
+ * there's no reference, no theme, or the index is out of range — a renderer falls back to the
+ * shape's own `spPr` fill either way, so this only matters for a shape that omits one (PowerPoint's
+ * Shape Styles gallery writes shapes exactly this way).
  */
 export function resolveStyleFill(
   ref: StyleMatrixReference | undefined,

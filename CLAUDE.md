@@ -16,27 +16,42 @@ them.
 
 ## Status
 
-- **`packages/presentation`** — type skeleton, complete enough to be a real target. No parsing,
-  no rendering, no runtime logic.
+- **`packages/presentation`** — the type skeleton, complete enough to be a real target, plus (new)
+  a `resolve/` directory of pure functions that compute OOXML's derived/effective values from that
+  graph — effective transform, effective run formatting, resolved fill/colour, auto-number
+  formatting/state — moved here from `to-html5` since none of it actually renders anything and any
+  future renderer needs the identical answer. Still no parsing and no output-format-specific logic
+  (CSS/SVG/DOM) — that stays a renderer's job. Also (new) `presentationml/animation.ts`: a `Slide`'s
+  optional `timing` (§19.3.1.48, `p:timing`) — the element/build animation timing tree (`par`/
+  `seq`/`excl` containers plus `set`/`anim`/`animEffect`/`animClr`/`animMotion`/`animRot`/
+  `animScale`/`cmd`/`audio`/`video` leaf behaviors, each with its own timing/conditions) and build
+  list (per-paragraph and per-diagram/chart/graphic implicit builds) — no resolution logic yet,
+  since (unlike text/placeholder/fill) there's no inheritance chain to walk here, just a tree to
+  represent as-is.
 - **`packages/reader`** — complete, parses real `.pptx` byte streams end-to-end into the
-  `presentation` graph, including a theme's `fmtScheme` fill/line style matrices and a
-  shape/picture/connector's own `p:style` `fillRef`/`lnRef`. Tested only against a synthetic
+  `presentation` graph, including a theme's `fmtScheme` fill/line style matrices, a
+  shape/picture/connector's own `p:style` `fillRef`/`lnRef`, and (new) a slide's `p:timing`
+  (`presentationml/animation.ts`'s `parseSlideTiming`). Tested only against a synthetic
   in-memory fixture (built via `fflate.zipSync` from hand-written XML in
   `read-presentation.test.ts`) — see Todos below.
 - **`packages/to-html5`** — layout is done: every slide and shape lands in the right place at the
   right size, including placeholder shapes that inherit position from their layout/master
-  (`placeholder.ts`) and responsive scale-to-container-width via CSS percentages + `aspect-ratio`
+  (`@pptx2html/presentation`'s `resolve/placeholder.ts` now, see above) and responsive
+  scale-to-container-width via CSS percentages + `aspect-ratio`
   (no JS resize handling). Formatting is under way step by step: run-level font formatting,
   paragraph alignment, and bulleted/numbered lists (typeface/size/bold/italic/underline/
   strikethrough/color/alignment/bullets), fully resolved through the same OOXML text-property
   inheritance chain (run/paragraph → shape → placeholder layout/master → master category style →
-  presentation default → theme), are all done (`text-style.ts`, `bullet.ts`, `color.ts`);
-  shape/picture `fill`/`.line` → CSS background/border is also done (`fill.ts`), and so is slide
-  background (`background.ts`, falling back through layout/master, reusing `fill.ts`). A shape with
+  presentation default → theme), are all done — the inheritance-walking itself now lives in
+  `presentation`'s `resolve/text-style.ts`/`bullet.ts`/`color.ts`, `to-html5` calls it and turns
+  the result into DOM/CSS; shape/picture `fill`/`.line` → CSS background/border is also done
+  (`fill.ts`), and so is slide background (`presentation`'s `resolve/background.ts`, falling back
+  through layout/master, `to-html5` reusing `fill.ts` to paint it). A shape with
   no explicit `spPr` fill/line of its own — how PowerPoint's Shape Styles gallery writes shapes by
   default — now falls back to resolving its `p:style` `fillRef`/`lnRef` against the theme's
-  format-scheme style matrix instead of rendering with no fill/border at all (`style-matrix.ts`,
-  wired into `shape-tree.ts`'s `effectiveFill`/`effectiveLine`). A shape's own preset outline now
+  format-scheme style matrix instead of rendering with no fill/border at all (`presentation`'s
+  `resolve/style-matrix.ts`,
+  wired into `to-html5`'s `shape-tree.ts`'s `effectiveFill`/`effectiveLine`). A shape's own preset outline now
   shapes that fill/line too, for a common subset of twelve presets
   (`shape-geometry.ts`) — `rect`/`roundRect`/`ellipse` via CSS `border-radius`, plus nine more
   (triangle, right triangle, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon, 5-point
@@ -47,9 +62,11 @@ them.
   `packages/to-html5/CLAUDE.md`). Table styles and connector line rendering are still unstyled by
   design. This is the actively-developed package right now.
 - **`apps/web-demo`** — wired to both `reader` and `to-html5`: picking a `.pptx` file renders it
-  into the page. `apps/web-demo/src/Presentation1.pptx` is a real (non-synthetic) fixture for
-  manual browser testing. Verifying changes here in an actual browser is on the user, by
-  preference — don't launch/kill the dev server unprompted.
+  into the page, and (new) also `console.log`s each slide's parsed `timing` when present, since
+  `to-html5` doesn't render animations yet (see Todos below) — the object model is the deliverable
+  for now, inspectable via devtools. `apps/web-demo/src/Presentation1.pptx` is a real
+  (non-synthetic) fixture for manual browser testing. Verifying changes here in an actual browser
+  is on the user, by preference — don't launch/kill the dev server unprompted.
 - **`packages/core`** — an unused scaffold left over from initial repo setup (`greet()`, one
   test). Nothing depends on it. Not part of the real pipeline — see Todos below.
 
@@ -60,20 +77,25 @@ them.
    bold/italic/underline/strikethrough/color/alignment/bullets) are all done, including full
    template/master inheritance (`SlideMaster.textStyles`, `Presentation.defaultTextStyle`, theme
    font scheme — alignment/bullet/indent all walk the exact same chain as character formatting,
-   see `TextListStyleLevel` in `packages/presentation`) and auto-numbering (`to-html5`'s
-   `bullet.ts`, ten `AutoNumberScheme`s). Shape/picture `ShapeProperties.fill`/`.line` → CSS
-   background/border is also done (`fill.ts`), including gradients and an approximated take on
-   pattern fills, and so is slide background (`background.ts`, falling back slide → layout →
+   see `TextListStyleLevel` in `packages/presentation`) and auto-numbering (now
+   `packages/presentation`'s `resolve/bullet.ts`, ten `AutoNumberScheme`s — see below). Shape/picture
+   `ShapeProperties.fill`/`.line` → CSS
+   background/border is also done (`to-html5`'s `fill.ts`), including gradients and an approximated take on
+   pattern fills, and so is slide background (`presentation`'s `resolve/background.ts`, falling back slide → layout →
    master). Font size, border width, and list indentation scale with the slide via `cqw`
    (container query width units) rather than a fixed px/pt, so they resize along with
    position/size instead of looking disproportionate at other container widths. Shape geometry
    (`ShapeProperties.geometry`, previously every shape/picture rendering as a plain rectangle
-   regardless of preset) is now also done for a common subset of twelve presets (`shape-geometry.ts`
+   regardless of preset) is now also done for a common subset of twelve presets (`to-html5`'s `shape-geometry.ts`
    — `rect`/`roundRect`/`ellipse` via CSS `border-radius`, nine more via an SVG `<path>` overlay).
    A shape's `p:style` `fillRef`/`lnRef` — PowerPoint's Shape Styles gallery writes shapes this way
    by default, with no explicit `spPr` fill/line at all — now resolves against the theme's
-   `FormatScheme.fillStyles`/`.lineStyles` as a fallback (`style-matrix.ts`); without this a very
+   `FormatScheme.fillStyles`/`.lineStyles` as a fallback (`presentation`'s `resolve/style-matrix.ts`); without this a very
    common class of real-world shape rendered with no fill/border whatsoever, regardless of geometry.
+   All of this inheritance-resolution logic (font/alignment/bullet chain, placeholder transform,
+   background fallback, style-matrix, coordinate math, colour resolution) moved from `to-html5`
+   into `packages/presentation/src/resolve/` this session, once it became clear none of it was
+   actually renderer-specific — see that package's CLAUDE.md for the full rationale and file list.
    Still remaining: table cell fill/styles, the ~170 presets outside that subset, `custGeom`
    (freeform path data, unmodeled in `packages/presentation`), gradient/pattern/blip fill on the
    nine SVG-path presets (solid-only today), clipping a _picture_ to one of those nine (only
@@ -98,7 +120,17 @@ them.
    installed without asking first.
 5. **`packages/core` is dead weight** — decide whether to delete it or repurpose it; right now it
    does nothing and nothing references it.
-6. **This session's work is uncommitted.** The font/alignment/list-formatting pass —
+6. **Animations aren't rendered yet.** `presentation`'s new `SlideTiming`/`TimeNode`/
+   `BuildListEntry` model the full timing tree and build list (see Status above), and `reader`
+   parses them, but `to-html5` doesn't consume `Slide.timing` at all — per explicit direction this
+   session, that's deliberately deferred; `apps/web-demo` just `console.log`s it for now. When
+   picked up: driving CSS animations/transitions from this tree, converting `animMotion`'s raw path
+   string to an SVG/CSS motion path, and turning a `bldP`'s implicit per-paragraph build into
+   staged reveal are all renderer-side work with nothing else needed from `presentation`/`reader`
+   first. A relative (`p:by`) colour shift on `animClr` and a colour value on an `anim`/`p:tav`
+   keyframe are both unmodeled (absolute `from`/`to` colours only) — see `animation.ts`'s own doc
+   comments in `packages/presentation`.
+7. **This session's work is uncommitted.** The font/alignment/list-formatting pass —
    `TextListStyle`/`TextListStyleLevel`/`Bullet`/`AutoNumberScheme`/`defaultRunProperties`/
    `listStyle`/`textStyles`/`defaultTextStyle` in `presentation` and their parsers in `reader`,
    plus `to-html5`'s `text-style.ts` (`levelChain`, `resolveEffectiveRunProperties`,
@@ -115,8 +147,16 @@ them.
    `StyleMatrixReference` (new `presentationml/shape-style.ts`) in `presentation`, their parsers in
    `reader` (`theme.ts`'s `parseFormatScheme`, `presentationml/shape-tree.ts`'s `parseShapeStyle`),
    and `to-html5`'s new `style-matrix.ts` (`resolveStyleFill`/`resolveStyleLine`) wired into
-   `shape-tree.ts`'s new `effectiveFill`/`effectiveLine` — are all working-tree changes on top of
-   the `to-html5` commit; nothing since has been committed.
+   `shape-tree.ts`'s new `effectiveFill`/`effectiveLine` — plus the most recent change: all six of
+   those inheritance-resolution files (`text-style.ts`, `placeholder.ts`, `background.ts`,
+   `bullet.ts`, `coordinate.ts`, `style-matrix.ts`) relocated from `to-html5` into
+   `packages/presentation/src/resolve/`, and `color.ts` split between a new pure resolver there and
+   a thinned CSS-formatting wrapper left in `to-html5` — plus this session's addition of the
+   animation/timing model — `presentationml/animation.ts` in both `presentation` and `reader`
+   (`SlideTiming`/`TimeNode`/`BuildListEntry` and `parseSlideTiming` respectively), `Slide.timing`
+   in `presentation`, its wiring in `reader`'s `presentationml/slide.ts`, and `apps/web-demo`'s new
+   per-slide `console.log` of it — are all working-tree changes on top of the `to-html5` commit;
+   nothing since has been committed.
 
 ## Where to look
 

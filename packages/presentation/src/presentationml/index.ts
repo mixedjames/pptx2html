@@ -1,3 +1,4 @@
+export * from './animation.js';
 export * from './common-slide-data.js';
 export * from './shape-style.js';
 export * from './shape-tree.js';

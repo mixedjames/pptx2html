@@ -1,4 +1,4 @@
-import type { Fill, FormatScheme, Line, StyleMatrixReference } from '@pptx2html/presentation';
+import type { Fill, FormatScheme, Line, StyleMatrixReference } from '../index.js';
 import { describe, expect, it } from 'vitest';
 import { resolveStyleFill, resolveStyleLine } from './style-matrix.js';
 

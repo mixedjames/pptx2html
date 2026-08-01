@@ -1,26 +1,14 @@
 import type { Presentation } from '@pptx2html/presentation';
 import { PptxPresentationElement, definePresentationElement } from './presentation-element.js';
 
-export { resolveEffectiveBackground } from './background.js';
-export { formatAutoNumber, NumberingState } from './bullet.js';
 export { resolveColor, resolveFillColor } from './color.js';
-export { IDENTITY_MAP, composeGroupMap, computeBox, mapPoint, mapSize } from './coordinate.js';
-export type { CoordinateMap, ElementBox } from './coordinate.js';
 export { applyFill, applyLine, resolveGradientCss } from './fill.js';
-export { findPlaceholderMatch, resolveInheritedTransform } from './placeholder.js';
 export { PptxPresentationElement, definePresentationElement } from './presentation-element.js';
 export type { RenderContext } from './render-context.js';
 export { renderShapeTreeNode } from './shape-tree.js';
 export { renderSlide } from './slide.js';
 export { renderTable } from './table.js';
 export { renderTextBody } from './text.js';
-export {
-  resolveEffectiveAlignment,
-  resolveEffectiveBullet,
-  resolveEffectiveIndent,
-  resolveEffectiveRunProperties,
-  resolveTypeface,
-} from './text-style.js';
 export { EMU_PER_PT, EMU_PER_PX, emuToCqw, emuToPx, fontSizeToEmu } from './units.js';
 
 /**

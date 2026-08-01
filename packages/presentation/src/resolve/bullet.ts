@@ -1,4 +1,4 @@
-import type { AutoNumberScheme } from '@pptx2html/presentation';
+import type { AutoNumberScheme } from '../drawingml/index.js';
 
 const ROMAN_NUMERALS: readonly (readonly [number, string])[] = [
   [1000, 'M'],

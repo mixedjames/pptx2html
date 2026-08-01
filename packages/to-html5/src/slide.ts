@@ -1,6 +1,6 @@
 import type { Slide, SlideSize, TextListStyle } from '@pptx2html/presentation';
-import { resolveEffectiveBackground } from './background.js';
-import { IDENTITY_MAP } from './coordinate.js';
+import { IDENTITY_MAP, resolveEffectiveBackground } from '@pptx2html/presentation';
+
 import { applyFill } from './fill.js';
 import type { RenderContext } from './render-context.js';
 import { renderShapeTreeNode } from './shape-tree.js';

@@ -5,6 +5,7 @@ import { parseBoolean } from '../drawingml/units.js';
 import type { ReaderContext } from '../reader-context.js';
 import { parseXml } from '../xml/parse.js';
 import { attr, findRoot, findChild } from '../xml/query.js';
+import { parseSlideTiming } from './animation.js';
 import { EMPTY_COMMON_SLIDE_DATA, parseCommonSlideData } from './common-slide-data.js';
 import { RELATIONSHIP_TYPES } from './relationship-types.js';
 
@@ -30,11 +31,13 @@ export function readSlide(context: ReaderContext, partName: string): Slide {
   }
 
   const showMasterShapes = root ? parseBoolean(attr(root, 'showMasterSp')) : undefined;
+  const timing = parseSlideTiming(root ? findChild(root, 'timing') : undefined);
 
   const slide: Slide = {
     commonSlideData,
     layout,
     ...(showMasterShapes !== undefined ? { showMasterShapes } : {}),
+    ...(timing ? { timing } : {}),
   };
   context.slides.set(partName, slide);
   return slide;

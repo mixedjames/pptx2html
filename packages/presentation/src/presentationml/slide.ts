@@ -1,3 +1,4 @@
+import type { SlideTiming } from './animation.js';
 import type { CommonSlideData } from './common-slide-data.js';
 import type { SlideLayout } from './slide-layout.js';
 
@@ -6,4 +7,5 @@ export interface Slide {
   readonly commonSlideData: CommonSlideData;
   readonly layout: SlideLayout;
   readonly showMasterShapes?: boolean;
+  readonly timing?: SlideTiming;
 }

@@ -26,7 +26,10 @@ element). A theme's `fmtScheme` fill/line style matrices (`fillStyleLst`/`lnStyl
 parsed too (`theme.ts`, reusing `drawingml/fill.ts`'s/`line.ts`'s own parsers), along with a
 shape/picture/connector's `p:style` `fillRef`/`lnRef` (`presentationml/shape-tree.ts`'s
 `parseShapeStyle`) — together these resolve the fill/line PowerPoint's Shape Styles gallery
-writes by default (a bare style reference, no explicit `spPr` fill/line at all). `tsc -b`,
+writes by default (a bare style reference, no explicit `spPr` fill/line at all). A slide's
+`p:timing` (§19.3.1.48 — element/build animation) is also parsed, by `presentationml/animation.ts`'s
+`parseSlideTiming`, into `Slide.timing`; see `packages/presentation/CLAUDE.md`'s own note on this
+for why (unlike everything else in this list) `to-html5` doesn't consume it yet. `tsc -b`,
 `eslint`, `vitest run` (whole repo) and `prettier --check` all pass as of this writing.
 
 ## Layout (mirrors `packages/presentation/src`'s own file layout 1:1)

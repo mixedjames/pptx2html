@@ -20,6 +20,9 @@ if (fileInput instanceof HTMLInputElement) {
       .then((buffer) => {
         const presentation = readPresentation(new Uint8Array(buffer));
         console.log(presentation);
+        presentation.slides.forEach((slide, index) => {
+          if (slide.timing) console.log(`Slide ${index + 1} timing:`, slide.timing);
+        });
         output?.replaceChildren(renderPresentation(presentation));
         setStatus(`Parsed ${file.name}: ${presentation.slides.length} slide(s).`);
       })

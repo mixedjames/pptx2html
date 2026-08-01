@@ -1,11 +1,11 @@
-import type { Point2D, Size2D, Transform2D } from '@pptx2html/presentation';
+import type { Point2D, Size2D, Transform2D } from '../drawingml/index.js';
 
 /**
  * Affine map (translate + scale, no rotation) from a local EMU coordinate space to the slide's
- * root EMU coordinate space. Rotation is intentionally excluded from composition — it's applied
- * per-element as a CSS transform at render time instead (see `computeBox`), so a group's
- * rotation does not compose into its children's own rotation. Good enough for laying elements
- * out; not spec-accurate for rotated groups.
+ * root EMU coordinate space. Rotation is intentionally excluded from composition — a renderer
+ * applies a shape's (or group's) own rotation/flip separately, around its own resolved box (see
+ * `computeBox`), so a group's rotation does not compose into its children's own rotation. Good
+ * enough for laying elements out; not spec-accurate for rotated groups.
  */
 export interface CoordinateMap {
   readonly offsetX: number;
@@ -49,10 +49,10 @@ export function composeGroupMap(map: CoordinateMap, transform: Transform2D): Coo
 
 /**
  * A shape's position/size in slide-root EMU coordinates (i.e. already run through a
- * `CoordinateMap`, but not yet converted to any CSS unit), plus its own (uncomposed)
- * rotation/flip. Deliberately left unit-less in EMU rather than px so callers can turn it into
- * whatever's responsive — see `shape-tree.ts`'s `positionElement`, which expresses it as a
- * percentage of the slide's own size so the whole slide scales with its container.
+ * `CoordinateMap`, but not yet converted to any renderer-specific unit), plus its own (uncomposed)
+ * rotation/flip. Deliberately left unit-less in EMU rather than any renderer's own unit so callers
+ * can turn it into whatever's appropriate — e.g. `@pptx2html/to-html5`'s `shape-tree.ts` expresses
+ * it as a percentage of the slide's own size so the whole slide scales with its container.
  */
 export interface ElementBox {
   readonly left: number;
