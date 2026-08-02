@@ -5,3 +5,4 @@ export * from './coordinate.js';
 export * from './placeholder.js';
 export * from './style-matrix.js';
 export * from './text-style.js';
+export * from './timing.js';

@@ -29,7 +29,12 @@ shape/picture/connector's `p:style` `fillRef`/`lnRef` (`presentationml/shape-tre
 writes by default (a bare style reference, no explicit `spPr` fill/line at all). A slide's
 `p:timing` (§19.3.1.48 — element/build animation) is also parsed, by `presentationml/animation.ts`'s
 `parseSlideTiming`, into `Slide.timing`; see `packages/presentation/CLAUDE.md`'s own note on this
-for why (unlike everything else in this list) `to-html5` doesn't consume it yet. `tsc -b`,
+for why (unlike everything else in this list) `to-html5` doesn't consume it yet. A slide's
+`p:transition` (§19.3.1.49 — the whole-slide effect played when the presentation advances into it)
+is parsed the same way by new `presentationml/transition.ts`'s `parseSlideTransition`, into
+`Slide.transition`, including resolving its optional `p:sndAc` sound via the same `resolveMedia`
+already threaded through `readSlide` for the slide's shape tree/background — `to-html5` doesn't
+consume this either, deliberately deferred alongside `timing`. `tsc -b`,
 `eslint`, `vitest run` (whole repo) and `prettier --check` all pass as of this writing.
 
 ## Layout (mirrors `packages/presentation/src`'s own file layout 1:1)

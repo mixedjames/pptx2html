@@ -21,17 +21,27 @@ them.
   graph — effective transform, effective run formatting, resolved fill/colour, auto-number
   formatting/state — moved here from `to-html5` since none of it actually renders anything and any
   future renderer needs the identical answer. Still no parsing and no output-format-specific logic
-  (CSS/SVG/DOM) — that stays a renderer's job. Also (new) `presentationml/animation.ts`: a `Slide`'s
+  (CSS/SVG/DOM) — that stays a renderer's job. Also `presentationml/animation.ts`: a `Slide`'s
   optional `timing` (§19.3.1.48, `p:timing`) — the element/build animation timing tree (`par`/
   `seq`/`excl` containers plus `set`/`anim`/`animEffect`/`animClr`/`animMotion`/`animRot`/
   `animScale`/`cmd`/`audio`/`video` leaf behaviors, each with its own timing/conditions) and build
-  list (per-paragraph and per-diagram/chart/graphic implicit builds) — no resolution logic yet,
-  since (unlike text/placeholder/fill) there's no inheritance chain to walk here, just a tree to
-  represent as-is.
+  list (per-paragraph and per-diagram/chart/graphic implicit builds). Also `presentationml/
+transition.ts`: a `Slide`'s optional `transition` (§19.3.1.49, `p:transition`) — the single
+  whole-slide effect (fade/wipe/push/split/wheel/zoom/..., the base schema's ten
+  `EG_SlideTransition` shapes covering ~20 effect names) played when the presentation advances into
+  that slide, plus its speed/advance-on-click/advance-after-N-ms settings and an optional sound.
+  Neither `timing` nor `transition` has an inheritance chain to walk (unlike text/placeholder/fill,
+  the parsed data already **is** the answer), but both now have a `resolve/` counterpart anyway:
+  (new) `resolve/timing.ts`'s `resolveTimeNodeDuration`/`resolveSlideTimingDuration` compute a
+  timing tree's own effective duration (or `'indefinite'` if any node is gated on a click/other
+  external event with no numeric delay fallback), and `resolveTransitionDurationMs` answers the
+  smaller `TransitionSpeed` → ms question (moved here from `to-html5`, which now consumes it) — see
+  "Future feature: scroll-driven playback" below for why this groundwork exists.
 - **`packages/reader`** — complete, parses real `.pptx` byte streams end-to-end into the
   `presentation` graph, including a theme's `fmtScheme` fill/line style matrices, a
-  shape/picture/connector's own `p:style` `fillRef`/`lnRef`, and (new) a slide's `p:timing`
-  (`presentationml/animation.ts`'s `parseSlideTiming`). Tested only against a synthetic
+  shape/picture/connector's own `p:style` `fillRef`/`lnRef`, a slide's `p:timing`
+  (`presentationml/animation.ts`'s `parseSlideTiming`), and (new) a slide's `p:transition`
+  (`presentationml/transition.ts`'s `parseSlideTransition`). Tested only against a synthetic
   in-memory fixture (built via `fflate.zipSync` from hand-written XML in
   `read-presentation.test.ts`) — see Todos below.
 - **`packages/to-html5`** — layout is done: every slide and shape lands in the right place at the
@@ -60,7 +70,14 @@ them.
   introduces — scale with the slide via CSS container query units (`cqw`) rather than a fixed
   px/pt, the same no-JS philosophy as position/size (`units.ts`'s `emuToCqw`; see
   `packages/to-html5/CLAUDE.md`). Table styles and connector line rendering are still unstyled by
-  design. This is the actively-developed package right now.
+  design. Navigating between slides (new) now plays a `Slide.transition` as a real animation, via
+  the Web Animations API rather than a plain CSS `transition`, when its effect is `push` or `fade`
+  — the destination's own going forward, the _outgoing_ slide's own reversed going backward
+  (undoing whichever animation brought it into view) — every other effect kind, and a slide with no
+  `transition` at all, still take the
+  pre-existing instant `display: none`/`block` swap (`presentation-element.ts`'s `#animatePush`/
+  `#animateFade` vs. `#updateActiveSlide`; see that package's CLAUDE.md for the full design). This
+  is the actively-developed package right now.
 - **`apps/web-demo`** — wired to both `reader` and `to-html5`: picking a `.pptx` file renders it
   into the page, and (new) also `console.log`s each slide's parsed `timing` when present, since
   `to-html5` doesn't render animations yet (see Todos below) — the object model is the deliverable
@@ -129,8 +146,34 @@ them.
    staged reveal are all renderer-side work with nothing else needed from `presentation`/`reader`
    first. A relative (`p:by`) colour shift on `animClr` and a colour value on an `anim`/`p:tav`
    keyframe are both unmodeled (absolute `from`/`to` colours only) — see `animation.ts`'s own doc
-   comments in `packages/presentation`.
-7. **This session's work is uncommitted.** The font/alignment/list-formatting pass —
+   comments in `packages/presentation`. Read "Future feature: scroll-driven playback" below (and
+   `docs/scroll-driven-playback.md`) before implementing this — it constrains _how_ this should be
+   driven, not just what it should render.
+7. **Slide transitions: `push`/`fade` are rendered, every other effect kind still isn't.**
+   `presentation`'s `SlideTransition`/`TransitionEffect`/`TransitionSoundAction`
+   (`presentationml/transition.ts`) model a slide's `p:transition`, `reader` parses it into
+   `Slide.transition`, and `to-html5`'s `PptxPresentationElement.goToSlide` (new) now plays it as a
+   real animation — via the Web Animations API rather than a plain CSS `transition`, so playback is
+   seekable (`docs/scroll-driven-playback.md`'s design note) — when `effect.kind` is `'push'` or
+   `'fade'` — forward navigation plays the destination slide's own transition, backward navigation
+   instead undoes the _outgoing_ slide's own transition (reversed direction for `push`) since
+   that's the animation being undone, not whatever the destination separately authors (a bug fixed
+   this session — see `packages/to-html5/CLAUDE.md` for the failure mode). Duration comes from a
+   documented `fast`/`med`/`slow` → ms approximation (OOXML doesn't specify one, and this mapping
+   now lives in `@pptx2html/presentation`'s `resolve/timing.ts`, not privately in `to-html5`), and
+   navigation is ignored entirely while a transition is in flight.
+   See `packages/to-html5/CLAUDE.md`'s "Key design decision: push/fade slide transitions" for the
+   full mechanism. Still unrendered: every other `TransitionEffect.kind` (wipe, cut, dissolve,
+   wheel, split, ...) — each a reasonably self-contained addition following the same pattern —
+   `fade`'s `throughBlack: true` two-stage fade-to-black variant (renders as a plain crossfade for
+   now), `advanceOnClick`/`advanceAfter` auto-advance timers, and `TransitionSoundAction` playback.
+   PowerPoint's newer "fancy" transitions (Morph, Ripple, Honeycomb, ...), authored via `p14:`/
+   `p15:`/`p159:` extensions rather than the base schema's `EG_SlideTransition` group, remain
+   unmodeled in `presentation`/`reader` entirely — see `packages/presentation/CLAUDE.md`'s scope
+   boundary. See also "Future feature: scroll-driven playback" below — `advanceOnClick`/
+   `advanceAfter` in particular are exactly the fields a future scroll-time total-duration
+   computation needs.
+8. **This session's work is uncommitted.** The font/alignment/list-formatting pass —
    `TextListStyle`/`TextListStyleLevel`/`Bullet`/`AutoNumberScheme`/`defaultRunProperties`/
    `listStyle`/`textStyles`/`defaultTextStyle` in `presentation` and their parsers in `reader`,
    plus `to-html5`'s `text-style.ts` (`levelChain`, `resolveEffectiveRunProperties`,
@@ -155,8 +198,47 @@ them.
    animation/timing model — `presentationml/animation.ts` in both `presentation` and `reader`
    (`SlideTiming`/`TimeNode`/`BuildListEntry` and `parseSlideTiming` respectively), `Slide.timing`
    in `presentation`, its wiring in `reader`'s `presentationml/slide.ts`, and `apps/web-demo`'s new
-   per-slide `console.log` of it — are all working-tree changes on top of the `to-html5` commit;
-   nothing since has been committed.
+   per-slide `console.log` of it — plus this session's addition of the slide transition model —
+   `presentationml/transition.ts` in both `presentation` and `reader` (`SlideTransition`/
+   `TransitionEffect`/`TransitionSoundAction` and `parseSlideTransition` respectively),
+   `Slide.transition` in `presentation`, and its wiring in `reader`'s `presentationml/slide.ts` (not
+   wired into `apps/web-demo`'s console logging at that point, per that round's explicit scope) —
+   plus this session's `to-html5`-only addition of `push`/`fade` slide-transition rendering —
+   `presentation-element.ts`'s `#transitions` state, `#animatePush`/`#animateFade`/
+   `#beginTransitionFrame`, the `REVERSE_SIDE_DIRECTION` table, and the `.pptx-slide--transitioning`
+   CSS class — plus a same-session bug fix to which slide's transition backward navigation reads
+   (see `packages/to-html5/CLAUDE.md`'s design decision) — plus this session's central timing API
+   and Web Animations API migration: `packages/presentation/src/resolve/timing.ts`
+   (`resolveTransitionDurationMs`, moved from `to-html5`'s former `TRANSITION_DURATION_MS`;
+   `resolveTimeNodeDuration`/`resolveSlideTimingDuration`, new) and its test file, plus
+   `presentation-element.ts`'s `#currentAnimations` state (replacing `#transitionTimeoutId`) and
+   `#awaitTransition`/`#finalizeTransition` (replacing `#scheduleFinalize`) now driving playback via
+   `Element.animate()` instead of a plain CSS `transition` + `setTimeout`, and
+   `presentation-element.test.ts`'s new `FakeAnimation`/`HTMLElement.prototype.animate` mock (since
+   `happy-dom` implements no Web Animations API at all) — are all working-tree changes on top of the
+   `to-html5` commit; nothing since has been committed.
+
+## Future feature: scroll-driven playback
+
+**Not started.** Full design note: [`docs/scroll-driven-playback.md`](docs/scroll-driven-playback.md).
+In short — a future feature will let a **fully time-resolved** deck (every advance driven by a
+numeric delay, nothing waiting on a click) be scrubbed by scroll position instead of played back in
+real time. Two constraints from that note apply to _all_ animation/transition work from here on,
+not just a future scroll feature, so they're repeated here:
+
+1. **Duration/timing computation belongs in `packages/presentation/resolve/`, as a pure function,
+   not inside a renderer.** Whether a timing tree is fully time-resolved (no `onClick`/`onNext`/etc.
+   wait anywhere) and how long any node/transition takes are renderer-agnostic questions — see
+   `resolve/timing.ts`.
+2. **Prefer the Web Animations API over plain CSS `transition`/`@keyframes` for anything new.** A
+   plain CSS transition can only be started and left to run; a WAAPI `Animation`'s `currentTime` is
+   directly readable/settable, which is exactly the capability a future scroll-time player needs.
+   `to-html5`'s slide-transition playback already migrated to this — see
+   `packages/to-html5/CLAUDE.md`.
+
+Don't let `PptxPresentationElement.goToSlide`'s click-navigation policies (slide-granular,
+non-interruptible mid-transition) be assumed as the only reasonable navigation shape elsewhere — a
+future scroll-seek API is additive, not a replacement.
 
 ## Where to look
 
@@ -164,3 +246,4 @@ them.
 - `packages/reader/CLAUDE.md` — parsing details, the SlideMaster↔SlideLayout cycle, open gaps.
 - `packages/to-html5/CLAUDE.md` — rendering design decisions (coordinate math, percentage-based
   responsive layout, placeholder inheritance), scope boundary, test layout.
+- `docs/scroll-driven-playback.md` — design note for a future scroll-driven playback feature.

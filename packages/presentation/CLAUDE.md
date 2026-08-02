@@ -31,10 +31,25 @@ main remaining rendering gap — see `packages/to-html5/CLAUDE.md`. `tsc -b`, `e
 
 `Slide` also now carries an optional `timing` (`presentationml/animation.ts`, §19.3.1.48's
 `p:timing`): the element/build animation timing tree and build list `reader` parses off a slide.
-Unlike everything above, this isn't wired into `to-html5` at all yet — by explicit direction, that
-package is deliberately not consuming it this round; `apps/web-demo` just logs it to the console.
-There's also no `resolve/` counterpart for it: unlike text/placeholder/fill, a timing tree has no
-inheritance chain to walk — the parsed tree already **is** the answer, nothing to derive.
+`to-html5` doesn't consume the tree itself yet (per-element/build animation rendering is still
+unstarted; `apps/web-demo` just logs it to the console) — but unlike when this was first written,
+there's no longer "nothing to derive" here: `resolve/timing.ts` (new) computes a node's/tree's own
+effective duration, since a scroll-driven-playback feature (see root `CLAUDE.md`'s design note,
+`docs/scroll-driven-playback.md`) needs exactly that answer and it's renderer-agnostic, same as
+every other file in `resolve/`.
+
+`Slide` also now carries an optional `transition` (`presentationml/transition.ts`, §19.3.1.49's
+`p:transition`): the single whole-slide effect (fade/wipe/push/split/wheel/zoom/... — the base
+schema's `EG_SlideTransition` choice group, ten shapes covering ~20 effect names) plus speed and
+advance-on-click/advance-after-N-ms settings, played when the presentation advances _into_ this
+slide. Distinct from `timing`'s per-element animation tree — a transition is a single flat value,
+not a tree — but its `speed` → millisecond mapping is exactly the kind of renderer-agnostic
+question `resolve/timing.ts`'s `resolveTransitionDurationMs` now answers (moved here from
+`to-html5`, which now consumes it for its `push`/`fade` transition playback — see that package's
+CLAUDE.md). Its optional sound (`TransitionSoundAction`, §19.3.1.49/50's `p:sndAc`) reuses
+`drawingml/media.ts`'s `MediaPart` rather than inventing a parallel representation, the same
+relationship-resolved-to-object-graph choice every other embedded binary in this package makes;
+sound playback itself remains unconsumed by `to-html5`.
 
 ## Key design decision: resolved object graph, not relationship IDs
 
@@ -103,8 +118,11 @@ itself defines.
   `common-slide-data.ts` (`CommonSlideData`/`Background`, shared by every
   slide-like part), `animation.ts` (`SlideTiming`/`TimeNode`/`BuildListEntry` — a slide's optional
   `p:timing`, consumed by `Slide.timing` in `slide.ts`; see the design-decision note above for why
-  it has no `resolve/` counterpart), then the part hierarchy: `slide-master.ts` → `slide-layout.ts`
-  → `slide.ts` → `notes.ts`, and `presentation.ts` as the DOM root.
+  it has no `resolve/` counterpart), `transition.ts` (`SlideTransition`/`TransitionEffect`/
+  `TransitionSoundAction` — a slide's optional `p:transition`, consumed by `Slide.transition` in
+  `slide.ts`; same no-`resolve/`-counterpart reasoning as `animation.ts`, see above), then the part
+  hierarchy: `slide-master.ts` → `slide-layout.ts` → `slide.ts` → `notes.ts`, and `presentation.ts`
+  as the DOM root.
 - `resolve/` — pure functions that compute a derived/effective value from the graph above; no
   DOM, no CSS, no output-format-specific logic anywhere in this directory (verified file-by-file
   when it was moved here from `to-html5`, and enforced going forward by the same absence). One
@@ -126,7 +144,14 @@ itself defines.
   (`ResolvedColor`/`resolveColor`/`resolveFillColor` — DrawingML colour resolution, scheme
   aliasing, HSL conversion, colour-transform math, stopping at a structured `{ rgb, alpha }` or
   `{ preset }` result rather than a CSS string — `to-html5`'s own `color.ts` is now a thin
-  CSS-formatting wrapper around this).
+  CSS-formatting wrapper around this), `timing.ts` (new — `resolveTransitionDurationMs` — a
+  `TransitionSpeed`'s `fast`/`med`/`slow` → millisecond mapping, moved here from `to-html5`;
+  `resolveTimeNodeDuration`/`resolveSlideTimingDuration` — a `TimeNode`'s/`SlideTiming`'s own
+  effective duration, or `'indefinite'` if it or any descendant can't complete without external
+  input, e.g. an `onClick`/`onNext` wait with no numeric delay fallback — the "is this
+  presentation fully time-resolved" question `docs/scroll-driven-playback.md` needs; see that
+  file's own doc comments for exactly which composition/repeat rules are exact vs. a documented
+  approximation).
 - `index.ts` / `drawingml/index.ts` / `presentationml/index.ts` / `resolve/index.ts` — barrel
   re-exports only.
 
@@ -177,6 +202,14 @@ code (search for "unmodeled for the skeleton"):
   (`p:seq`'s `prevCondLst`/`nextCondLst`, used by interactive sequences); a `p:iterate` (by-letter/
   by-word text animation); or a paragraph build's `"cust"` build type (a custom build fully
   described by the real timing tree, with no implicit shorthand to represent).
+- `transition.ts`'s `TransitionEffect` covers every effect in the base schema's
+  `EG_SlideTransition` choice group (§19.3.1.49 — blinds/checker/circle/comb/cover/cut/diamond/
+  dissolve/fade/newsflash/plus/pull/push/random/randomBar/split/strips/wedge/wheel/wipe/zoom), but
+  not PowerPoint's newer "fancy" transitions (Morph, Reveal, Ripple, Honeycomb, Vortex, Shred,
+  Switch, Airplane, Cube, Doors, Gallery, Prism, Origami, Pan, Ferris, Fracture, Crush, Curtains,
+  Windows, Warp, Glitter, Flythrough, ...), which PowerPoint authors as `p14:`/`p15:`/
+  `p159:` extension elements inside `p:transition`'s `p:extLst` rather than through that group —
+  parsing `p:extLst` at all is a separate, currently-unstarted piece of surface area.
 
 **Rule for extending this**: if the reader needs to surface one of these, add the
 type here first, then implement the parser in `packages/reader`. Don't let the
@@ -200,6 +233,16 @@ composing across nested groups); `color.test.ts` asserts on `ResolvedColor` stru
 RGB tuples, a `{ type: 'preset' }` case) rather than CSS strings — `to-html5`'s own `color.test.ts`
 still separately covers the CSS-formatting step end-to-end, and kept passing unchanged through
 this split since `resolveColor`/`resolveFillColor`'s public signature there didn't change.
+`timing.test.ts` (new) covers `resolveTransitionDurationMs`'s fast/med/slow/absent-defaults-to-fast
+mapping and `resolveTimeNodeDuration`'s full composition rules directly, with small `leaf`/`par`/
+`seq`/`excl` fixture builders (mirroring `text-style.test.ts`'s builder-helper convention rather
+than hand-writing nested object literals per test): explicit numeric/`'indefinite'` duration on a
+leaf, `par`/concurrent-`seq` (max) vs. non-concurrent-`seq`/`excl` (sum) composition, a child's
+numeric start-condition delay adding into its contribution, a click-gated child (no numeric delay)
+propagating `'indefinite'` up the whole tree, an OR'd condition list resolving via its one numeric
+member rather than going indefinite, `repeatCount`/`repeatCount: 'indefinite'`/`repeatDuration`/
+`autoReverse` each exercised on a leaf, a container's own explicit `duration` overriding its
+children-derived computation, and one nested-container composition case.
 
 ## Next likely steps
 
@@ -216,3 +259,15 @@ this split since `resolveColor`/`resolveFillColor`'s public signature there didn
    package's CLAUDE.md) doesn't need anything new here — `PresetGeometry` already carries every
    preset name and any literal `val N` adjustment guide, a consumer just needs to turn more of
    them into real outlines.
+4. **Done, this session**: `resolve/timing.ts` — `resolveTimeNodeDuration` computes a `TimeNode`'s
+   own effective duration (or `'indefinite'` if it or any descendant is gated on a click/other
+   external event with no numeric delay fallback — exactly the "is this presentation fully
+   time-resolved" question a future scroll-driven-playback feature needs, see root `CLAUDE.md`'s
+   design note / `docs/scroll-driven-playback.md`), and `resolveTransitionDurationMs` (moved from
+   `to-html5`, which now consumes it) answers the smaller `TransitionSpeed` → ms question. Honest
+   remaining gap, clearly documented in `timing.ts` itself rather than silently assumed: container
+   scheduling (`excl`'s real "at most one active" semantics, an interactive sequence's own advance
+   conditions) and the `repeatCount`/`autoReverse` interaction are approximated, not spec-exact —
+   nothing currently consumes exact values, so this hasn't mattered yet. Nothing in `to-html5`
+   duplicates this logic; see that package's CLAUDE.md for how it now uses
+   `resolveTransitionDurationMs`.

@@ -14,6 +14,7 @@ const CONTENT_TYPES = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="wav" ContentType="audio/wav"/>
   <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
   <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
   <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
@@ -134,6 +135,12 @@ const SLIDE_XML = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       </p:pic>
     </p:spTree>
   </p:cSld>
+  <p:transition spd="med" advClick="0" advTm="4000">
+    <p:fade thruBlk="1"/>
+    <p:sndAc>
+      <p:stSnd loop="0"><p:snd r:embed="rId4"/></p:stSnd>
+    </p:sndAc>
+  </p:transition>
   <p:timing>
     <p:tnLst>
       <p:par>
@@ -157,6 +164,7 @@ const SLIDE_RELS = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide" Target="../notesSlides/notesSlide1.xml"/>
+  <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/audio" Target="../media/audio1.wav"/>
 </Relationships>`;
 
 const NOTES_MASTER_XML = xml`<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -191,6 +199,7 @@ const NOTES_SLIDE_RELS = xml`<?xml version="1.0" encoding="UTF-8" standalone="ye
 </Relationships>`;
 
 const IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const AUDIO_BYTES = new Uint8Array([0x52, 0x49, 0x46, 0x46]);
 
 function buildFixturePptx(): Uint8Array {
   return zipSync({
@@ -209,6 +218,7 @@ function buildFixturePptx(): Uint8Array {
     'ppt/notesSlides/notesSlide1.xml': NOTES_SLIDE_XML,
     'ppt/notesSlides/_rels/notesSlide1.xml.rels': NOTES_SLIDE_RELS,
     'ppt/media/image1.png': IMAGE_BYTES,
+    'ppt/media/audio1.wav': AUDIO_BYTES,
   });
 }
 
@@ -263,6 +273,18 @@ describe('readPresentation (synthetic end-to-end fixture)', () => {
     if (picture?.kind === 'picture') {
       expect(picture.image.data).toEqual(IMAGE_BYTES);
     }
+
+    expect(slide.transition).toEqual({
+      speed: 'med',
+      advanceOnClick: false,
+      advanceAfter: 4000,
+      effect: { kind: 'fade', throughBlack: true },
+      sound: {
+        kind: 'play',
+        sound: { contentType: 'audio/wav', data: AUDIO_BYTES },
+        loop: false,
+      },
+    });
 
     expect(slide.timing?.timeNodeTree).toMatchObject({
       kind: 'par',

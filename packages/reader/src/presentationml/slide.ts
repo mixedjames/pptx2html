@@ -8,6 +8,7 @@ import { attr, findRoot, findChild } from '../xml/query.js';
 import { parseSlideTiming } from './animation.js';
 import { EMPTY_COMMON_SLIDE_DATA, parseCommonSlideData } from './common-slide-data.js';
 import { RELATIONSHIP_TYPES } from './relationship-types.js';
+import { parseSlideTransition } from './transition.js';
 
 /**
  * Parses a slide part (§19.3.1.38, p:sld). Requires that `readSlideMaster` has already been
@@ -31,12 +32,17 @@ export function readSlide(context: ReaderContext, partName: string): Slide {
   }
 
   const showMasterShapes = root ? parseBoolean(attr(root, 'showMasterSp')) : undefined;
+  const transition = parseSlideTransition(
+    root ? findChild(root, 'transition') : undefined,
+    resolveMedia,
+  );
   const timing = parseSlideTiming(root ? findChild(root, 'timing') : undefined);
 
   const slide: Slide = {
     commonSlideData,
     layout,
     ...(showMasterShapes !== undefined ? { showMasterShapes } : {}),
+    ...(transition ? { transition } : {}),
     ...(timing ? { timing } : {}),
   };
   context.slides.set(partName, slide);

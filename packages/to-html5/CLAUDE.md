@@ -10,7 +10,7 @@ const el = renderPresentation(presentation); // <pptx-presentation>, shadow DOM 
 document.body.appendChild(el);
 ```
 
-## Status: layout, plus formatting passes for fonts/alignment/lists, shape fill/line (+ style-matrix fallback), shape geometry, and slide backgrounds — all responsively scaled
+## Status: layout, formatting passes (fonts/alignment/lists, shape fill/line, geometry, backgrounds) — all responsively scaled — plus slideshow navigation
 
 Every slide and shape lands in the right place at the right size, including placeholder shapes
 that inherit their position from the slide layout/master rather than declaring their own (very
@@ -40,7 +40,15 @@ same `fill.ts` machinery. Every absolute magnitude this pass introduces — font
 list indentation — scales with the slide via CSS container query units rather than a fixed px/pt
 (see "Key design decision: absolute sizes scale via `cqw`" below), consistent with how
 position/size already scale via percentages. Table cell/table styling is still unrendered —
-deliberately deferred to a later pass.
+deliberately deferred to a later pass. `<pptx-presentation>` now renders as an actual
+slideshow rather than every slide stacked one below the next — one slide visible at a time,
+advanced by click/keyboard (see "Key design decision: slideshow navigation" below). Navigating
+between slides now (new) plays `Slide.transition`'s own effect when it's `push` or `fade` (§19.3.1.49,
+`p:transition` — see "Key design decision: push/fade slide transitions" below) — a real animation,
+driven by the Web Animations API rather than a plain CSS `transition` (see that same design
+decision for why), rather than the instant swap every other effect kind (and a slide with no
+`transition` at all) still falls back to. `Slide.timing`'s per-element/per-build animation tree
+remains entirely unconsumed here still — see root `CLAUDE.md`'s Todos.
 
 ## Layout
 
@@ -172,7 +180,21 @@ turns the result into DOM/CSS/SVG — the entries below cover what's left here.
   `Presentation` itself isn't otherwise threaded this deep).
 - `presentation-element.ts` — `PptxPresentationElement`, a `<pptx-presentation>` custom element.
   Shadow DOM is attached in the constructor; `.render(presentation)` replaces its slide children.
-  `definePresentationElement()` registers the tag (idempotent).
+  Renders as a **slideshow**, not a stacked list — all slides are rendered into the shadow DOM up
+  front (`.render()`) but only the current one is visible (`.pptx-slide--active`, CSS
+  `display: none` on the rest — see the design decision below); `definePresentationElement()`
+  registers the tag (idempotent). Navigation: `.next()`/`.previous()`/`.goToSlide(index)` (all
+  clamped to the slide range), `.currentSlideIndex`/`.slideCount` getters, a click anywhere on the
+  element advances one slide, and (once focused — a click also focuses it, since the element sets
+  `tabIndex = 0`) `ArrowRight`/`ArrowDown`/`PageDown`/space/`Enter` advance, `ArrowLeft`/`ArrowUp`/
+  `PageUp`/backspace retreat, `Home`/`End` jump to the first/last slide — mirroring PowerPoint's own
+  presentation-mode key bindings. `goToSlide` (new) also plays a `Slide.transition` (the
+  destination's own going forward, the outgoing slide's own reversed going backward — see "Key
+  design decision: push/fade slide transitions" below) when its `effect.kind` is `'push'` or
+  `'fade'` — see that section for the mechanism (`#animatePush`/`#animateFade`,
+  `#beginTransitionFrame`, `#awaitTransition`/`#finalizeTransition`); every other effect kind, and a
+  slide with no `transition` at all, still takes the unchanged instant-swap path
+  (`#updateActiveSlide`).
 - `index.ts` — barrel + `renderPresentation`, which registers the element and returns one
   instance with `.render()` already called.
 
@@ -322,6 +344,142 @@ length yet** — it silently drops any `el.style.fontSize`/`.borderWidth` assign
 DOM-level tests that exercise these (`text.test.ts`, `fill.test.ts`) can't assert on those specific
 properties' values; see their `NOTE` comments and the Tests section below.
 
+## Key design decision: all slides render into the DOM up front; navigation toggles visibility, it doesn't re-render
+
+`<pptx-presentation>` could instead render only the current slide and call `renderSlide` again on
+every `.next()`/`.previous()`/`.goToSlide()`, discarding the rest. We didn't do that:
+`PptxPresentationElement.render()` renders every slide once into `#slidesContainer` and keeps them
+all in the shadow DOM; navigation just toggles which one carries `.pptx-slide--active` (CSS
+`display: none` on the rest). Two reasons: (1) it's what slide transitions (`push`/`fade`, now
+implemented — see below — and per-slide/per-element animations off `Slide.timing`, still
+unconsumed, see root `CLAUDE.md`'s Todos) need anyway, since animating a transition _between_ two
+slides means both their DOM subtrees have to exist simultaneously at some point, not be created on
+demand mid-transition; (2) it keeps `.next()`/`.previous()` synchronous and re-render-free, matching this
+package's existing "resolve once, mutate style/class thereafter" style elsewhere (e.g. inline style
+application in the font/alignment/bullet pass). Trade-off: every slide's full shape tree is built
+and sitting in the DOM even for slides the user never reaches — fine at typical deck sizes (tens of
+slides), not investigated for decks with hundreds.
+
+Within that, advancing was originally a same-instant CSS swap (`display: none` ↔ `block`) for every
+slide, deliberately minimal for that first pass. `push`/`fade` (new) now animate instead — see "Key
+design decision: push/fade slide transitions" below — but every other effect kind, and a slide with
+no `transition` at all, still take exactly this same-instant path unchanged.
+
+Keyboard bindings mirror PowerPoint's own presentation-mode keys (right/down/page-down/space/enter
+advance; left/up/page-up/backspace retreat; home/end jump to first/last) rather than inventing a
+new scheme, since anyone who's used PowerPoint's slideshow mode already knows them. The element
+sets `tabIndex = 0` (unless the host page already set its own `tabindex`) so it's keyboard-focusable
+at all (custom elements aren't by default) and a click both focuses it (native behaviour for a
+`tabindex`-bearing element) and advances one slide — consistent with PowerPoint's own "click
+advances" behaviour, and meaning a single click is enough to both enter the presentation and start
+advancing through it, no separate focus step needed. Clicking never retreats (matching PowerPoint)
+— only keyboard/`.previous()` do. This is set in `connectedCallback()`, not the constructor: the
+Custom Elements spec forbids a constructor from adding attributes to the element, and `tabIndex`
+reflects to the `tabindex` attribute — doing it in the constructor throws (`NotSupportedError`) in
+spec-strict implementations (WebKit), aborting the whole upgrade so the element never gets its
+`render`/`next`/etc. methods at all. Everything else construction-time here (attaching the shadow
+root, appending the `<style>`/slides-container children _inside that shadow root_, registering
+event listeners) is fine in the constructor — the restriction is specifically about the element's
+own light-DOM attributes/children, not its shadow tree or listeners.
+
+## Key design decision: push/fade slide transitions
+
+`Slide.transition` (§19.3.1.49, `p:transition`) describes the effect played when the presentation
+_arrives at that slide_ going forward — OOXML has no notion of "backward" for it to describe.
+`goToSlide` (`presentation-element.ts`) therefore looks up **the destination's own transition when
+advancing forward, but the _outgoing_ slide's own transition when retreating backward**, and plays
+it in reverse — going back to slide N-1 undoes whichever animation originally brought slide N into
+view, rather than consulting whatever (if anything) slide N-1 separately authors for its own
+forward arrival. Getting this backward (pun intended) was an actual bug in an earlier version of
+this code, which always read the destination's transition regardless of direction — harmless when
+adjacent slides share the same effect, but visibly wrong whenever they don't (e.g. slide 2 authors
+`fade` and slide 1 authors `push`: retreating from 2 to 1 must undo slide 2's fade, not play a push
+just because slide 1 happens to have its own, unrelated transition). Only two of `TransitionEffect`'s
+~20 `kind`s are implemented — `push` (`SideDirectionTransitionEffect`, direction `l`/`u`/`r`/`d`,
+defaulting to `'l'`) and `fade` (`FadeTransitionEffect`) — every other kind (wipe, cut, dissolve,
+wheel, split, ...) and a slide with no `transition` at all still take the pre-existing instant
+`display: none`/`block` swap (`#updateActiveSlide`) unchanged; see the scope boundary below for why
+the rest aren't done yet.
+
+**Both slides coexist and animate simultaneously, briefly.** The pre-existing "all slides render
+into the DOM up front" decision (above) already keeps every slide's subtree alive; a transition
+additionally makes both the outgoing and incoming slide `position: absolute` (added via inline
+`style.position`, never a CSS class — `slide.ts`'s `renderSlide` already sets `position: relative`
+as an _inline_ style, which a class rule can never override) and `display: block`
+(`.pptx-slide--transitioning` + `.pptx-slide--active` on both) for the transition's duration, so
+each can be animated independently. `.pptx-presentation` needed two additions to support this:
+`overflow: hidden` (so a mid-push slide is clipped at the container edge instead of bleeding into
+the page) and an explicit `aspect-ratio` set from `presentation.slideSize` in `.render()` (mirroring
+`slide.ts`'s own per-slide line) — without it, the container would collapse to zero height the
+moment neither slide is contributing to normal-flow layout.
+
+**Playback is driven by the Web Animations API (`Element.animate()`), not a plain CSS
+`transition`.** `#animatePush`/`#animateFade` call `.animate(keyframes, options)` directly on each
+slide with explicit from/to keyframes, rather than writing a CSS `transition-duration` and then
+mutating `style.transform`/`style.opacity` and letting the browser interpolate. Two concrete wins
+from this, beyond the motivating one (see `docs/scroll-driven-playback.md` — a WAAPI `Animation`'s
+`currentTime` is directly seekable, unlike a CSS transition, which a future scroll-driven playback
+mode will need): (1) the reflow-forcing hack a CSS-transition version needs (write the start value,
+force a synchronous reflow read, then write the end value — otherwise both writes collapse into one
+style recalculation and never animate) is unnecessary and gone entirely, since `.animate()` takes
+both endpoints as data in one call; (2) the defensive "write this property even though it doesn't
+change, in case a prior different-effect transition left a stale value" keyframe writes are also
+gone — `#finalizeTransition` (below) always `.cancel()`s a finished animation, fully releasing its
+property override, so there's no stale-value risk left to guard against. `#currentAnimations:
+Animation[]` (non-empty _is_ the "a transition is in flight" flag) tracks both animations;
+`#awaitTransition` does `Promise.all([...].map(a => a.finished)).then(() => this.#finalizeTransition(...))`,
+with a `.catch(() => {})` for the expected rejection when `render()` cancels an in-flight animation
+(a new presentation rendered mid-transition).
+
+**Cancelling a finished animation at cleanup time is a correctness requirement, not just hygiene.**
+The same slide elements are reused across every future transition (`render()` builds them once);
+leaving a finished, `fill: 'forwards'`-holding `Animation` attached to an element would stack
+ambiguously against whatever plays on it next. `#finalizeTransition` calls `.cancel()` on both
+animations before clearing state — safe to do visually, since cancelling reverts each property to
+its element's _base_ style, which for every keyframe this file ever animates (`transform`/
+`opacity`) happens to already equal the intended resting value, because neither is ever written as a
+raw inline style anywhere else in this file.
+
+**Duration is a documented approximation, now resolved by `@pptx2html/presentation`, not private
+here.** OOXML's `TransitionSpeed` (`'slow'|'med'|'fast'`) is qualitative — no spec-mandated
+millisecond value — `resolveTransitionDurationMs` (`packages/presentation/src/resolve/timing.ts`)
+fixes `fast: 400, med: 700, slow: 1000`, the same tier of best-effort stand-in as this package's
+other underspecified-OOXML-magnitude choices (`shape-geometry.ts`'s adjustment-guide defaults,
+`fill.ts`'s pattern-hatch spacing) — moved out of this package since any renderer driving a
+transition needs the identical answer (see that file's own doc comment, and root `CLAUDE.md`'s
+scroll-driven-playback design note for why this matters beyond just avoiding duplication).
+
+**Testing a WAAPI-driven mechanism against `happy-dom`, which implements none of it.** This
+package's `happy-dom` test environment (see Tests below) has _no_ `Element.prototype.animate` at
+all — not a partial/CSS-only gap the way `transitionend` was for the previous CSS-transition
+version, a complete absence. `presentation-element.test.ts`'s `describe('push/fade transitions', ...)`
+block installs its own `HTMLElement.prototype.animate` mock (a `FakeAnimation` class whose
+`.finished` promise resolves via a `setTimeout` matching the requested duration) rather than relying
+on any real implementation — see Tests below for the full mechanism and why `vi.useFakeTimers()`
+alone isn't enough here (`Animation.finished` is a real `Promise`, so its `.then()` runs on the
+microtask queue, which needs `vi.advanceTimersByTimeAsync()`, not the synchronous
+`vi.advanceTimersByTime()` the pre-WAAPI version used).
+
+**Navigation is ignored outright while a transition is in flight**, rather than interrupted-and-
+restarted or queued: `goToSlide`'s very first check is whether `#currentAnimations.length > 0`
+(non-empty _is_ the "animating" flag, no separate boolean), returning immediately if so — a
+click/keypress/method call mid-transition has no effect at all until the current one finishes. This
+was a deliberate simplicity choice over the alternatives (both of which need correctly canceling
+and restarting an in-flight animation, a meaningfully harder problem) for this first pass.
+
+**A directional effect's direction reverses for backward navigation, on top of the
+which-slide's-transition fix above.** A `push` authored `direction: 'l'` on slide N plays
+push-left when advancing into slide N, but push-right when retreating out of slide N back to
+N-1 (`REVERSE_SIDE_DIRECTION`) — the same authored transition, played frame-for-frame in
+reverse, which is what "undoing" an animation means. This compounds with, not replaces,
+`goToSlide`'s outgoing-vs-destination lookup: the _which-transition_ fix says whose `effect` to
+read for a backward step, and this direction flip says how to play that specific effect once
+you're playing it in reverse.
+
+**`fade`'s `throughBlack: true` renders identically to a plain crossfade this round** — the real
+two-stage fade-out-to-black-then-in-from-black animation `throughBlack` describes is a deferred
+follow-up (see the scope boundary below), not implemented as a distinct path yet.
+
 ## Scope boundary — what's intentionally unmodeled (yet)
 
 - **Run-level font colour only resolves solid fills.** `RunProperties.fill` can technically be a
@@ -400,6 +558,18 @@ properties' values; see their `NOTE` comments and the Tests section below.
   `PptxPresentationElement` (or rendering many presentations in one page) will leak blob URLs.
   Deferred — would need the created URLs plumbed back up to `PptxPresentationElement` so it can
   revoke on re-render/disconnect.
+- **Only `push` and `fade` play a real slide transition.** Every other `TransitionEffect.kind`
+  (`wipe`, `cut`, `dissolve`, `newsflash`, `wheel`, `split`, `strips`, `zoom`, `blinds`, `checker`,
+  `comb`, `randomBar`, `circle`, `diamond`, `plus`, `pull`, `cover`, `random`, `wedge`) still takes
+  the plain instant swap — each is a reasonably self-contained addition to `goToSlide`'s dispatch in
+  `presentation-element.ts` once picked up, following the same pattern `#animatePush`/`#animateFade`
+  establish. `fade`'s `throughBlack: true` variant renders as a plain crossfade rather than its own
+  real fade-to-black-then-in animation (see "Key design decision: push/fade slide transitions"
+  above). `SlideTransition.advanceOnClick`/`.advanceAfter` (auto-advance timers) and
+  `.sound`/`TransitionSoundAction` (playing/stopping audio during the transition) are both parsed by
+  `packages/reader` already but entirely unconsumed here — a slide's transition only plays in
+  response to explicit navigation (click/keyboard/`goToSlide`), never on its own after a timeout,
+  and no audio ever plays.
 
 ## Tests
 
@@ -470,32 +640,84 @@ values and `happy-dom`'s CSSOM silently drops style assignments in units it does
 decision above). Both files have a `NOTE` comment at the point this bites; the actual
 `emuToCqw`/`fontSizeToEmu` conversion math is still fully covered, DOM-free, in `units.test.ts`.
 
+`presentation-element.test.ts` (new coverage) exercises the slideshow behaviour end-to-end:
+`.render()` starts at slide 0 with exactly one `.pptx-slide--active`; `.next()`/`.previous()`
+advance/retreat and clamp at the first/last slide (a no-op past either end, not a wraparound);
+`.goToSlide()` clamps an out-of-range index the same way; a synthetic `click()` on the element
+advances one slide; and a dispatched `keydown` `KeyboardEvent` for `ArrowRight`/space advances,
+`ArrowLeft` retreats, and `Home`/`End` jump to the first/last slide.
+
+Its nested `describe('push/fade transitions', ...)` block scopes both `vi.useFakeTimers()`/
+`vi.useRealTimers()` and a `HTMLElement.prototype.animate` mock to itself via `beforeEach`/
+`afterEach`, so the file's pre-existing synchronous tests are unaffected. The mock — a local
+`FakeAnimation` class plus a `vi.fn()` installed directly on the prototype (`happy-dom` has no
+`animate` method at all to `vi.spyOn`) — records each call's `target`/`keyframes`/`options` into a
+`recordedAnimations` array and returns a `FakeAnimation` whose `.finished` promise resolves via a
+`setTimeout` matching the requested duration; a `latestAnimation(el)` helper looks up the most
+recently queued recording for a given element, which is what makes the multi-transition tests (two
+or three sequential navigations in one `it`) tractable without index arithmetic. Assertions on
+_which_ animation was requested (keyframes, duration) read `recordedAnimations`/`latestAnimation`
+synchronously right after calling `.next()`/`.previous()`/`.goToSlide()` — `.animate()` itself is
+called synchronously inside `goToSlide`, only its `.finished` resolution is async — while assertions
+on _post-completion_ state (`await vi.advanceTimersByTimeAsync(durationMs)`, not the synchronous
+`vi.advanceTimersByTime()` a plain-timer design could use, since `Animation.finished` is a real
+`Promise` whose `.then()` needs a microtask flush between simulated ticks) check classes/`position`
+and that a subsequent navigation succeeds, proving `#currentAnimations` was cleared. Coverage: push
+forward on both axes and with an omitted (defaulting to `'l'`) direction, push direction reversing
+for backward navigation (authoring the transition on the _outgoing_ slide, matching the corrected
+which-slide's-transition lookup above — see that section's own note on the bug this fixes), a
+dedicated regression test with three slides (push then fade) proving backward navigation undoes the
+outgoing slide's own effect kind rather than the destination's, fade forward, `fade`'s
+`throughBlack: true` rendering identically to a plain fade, the no-transition and
+unsupported-effect-kind cases both still taking the unchanged instant-swap path (no
+`pptx-slide--transitioning` class ever appears, `recordedAnimations` stays empty), navigation being
+ignored entirely across every input method (click/keydown/`.next()`/`.previous()`/`.goToSlide()`)
+while a transition is in flight and succeeding again once it elapses, and the exact
+`fast`/`med`/`slow` duration mapping (400/700/1000ms) as a pinned regression contract.
+
 ## Next likely steps
 
-1. `TextBodyProperties.anchor`/`wrap` → flex/white-space, table cell fill, table styles.
-2. Connector line rendering (see the scope boundary above) — likely an SVG line/path overlay
+1. Widening slide-transition coverage beyond `push`/`fade` — each remaining `TransitionEffect.kind`
+   (`wipe`, `cut`, `dissolve`, `wheel`, `split`, ...) is a reasonably self-contained addition to
+   `goToSlide`'s dispatch in `presentation-element.ts`, following the `#animatePush`/`#animateFade`
+   pattern (now WAAPI-based — see that design decision above); `fade`'s `throughBlack: true`
+   two-stage fade-to-black-then-in animation, `advanceOnClick`/`advanceAfter` auto-advance timers,
+   and `TransitionSoundAction` playback are separate, currently unstarted pieces of that same
+   surface area (see the scope boundary above). Per-slide/per-element animations off `Slide.timing`
+   remain a separate, bigger piece of work (root `CLAUDE.md`'s Todos). This session's two enabling
+   pieces for a future scroll-driven-playback feature — a central duration-resolution API in
+   `@pptx2html/presentation` (`resolve/timing.ts`, see that package's CLAUDE.md) and migrating
+   slide-transition playback off plain CSS `transition` onto the Web Animations API — are both
+   done; read root `CLAUDE.md`'s "Future feature: scroll-driven playback" section /
+   `docs/scroll-driven-playback.md` before picking up either of the two items above, since the same
+   constraints (duration logic stays in `@pptx2html/presentation`, prefer WAAPI over plain CSS
+   `transition`/`@keyframes`) apply to them too.
+2. `TextBodyProperties.anchor`/`wrap` → flex/white-space, table cell fill, table styles.
+3. Connector line rendering (see the scope boundary above) — likely an SVG line/path overlay
    sized to the connector's own box, reusing `applyLine`'s color/width/dash resolution but not its
    `border-*` output. `shape-tree.ts`'s new `renderShapeOutline` (an `<svg>` sized to a shape's own
    box, see above) is a directly reusable pattern for this now that it exists.
-3. Widening `shape-geometry.ts`'s preset coverage — arrows (`rightArrow`/`leftArrow`/etc.), other
+4. Widening `shape-geometry.ts`'s preset coverage — arrows (`rightArrow`/`leftArrow`/etc.), other
    star counts (`star4`/`star6`/etc.), and flowchart shapes are all common in real decks and not
    yet modeled; each is a straightforward addition to `presetShapePath`'s switch.
-4. Gradient/pattern/blip fill support on the nine SVG-path presets (currently solid-only, see the
+5. Gradient/pattern/blip fill support on the nine SVG-path presets (currently solid-only, see the
    scope boundary above) — an SVG `<linearGradient>`/`<pattern>` `<defs>` entry referenced via
    `fill="url(#id)"` would parallel `resolveGradientCss`'s CSS-gradient output without the
    rectangular-background constraint, but needs its own angle/stop-position math since SVG
    gradients use `objectBoundingBox` coordinates, not CSS's `linear-gradient()` syntax.
-5. Clipping a picture to one of `shape-geometry.ts`'s nine SVG-path presets (not just `roundRect`/
+6. Clipping a picture to one of `shape-geometry.ts`'s nine SVG-path presets (not just `roundRect`/
    `ellipse`'s native `border-radius`) — needs an `<svg><image>` + `<clipPath>` overlay in place of
    the plain `<img>` `renderPicture` emits today.
-6. `p:style/effectRef` and `fontRef` (see the scope boundary above) — `effectRef` needs effect
+7. `p:style/effectRef` and `fontRef` (see the scope boundary above) — `effectRef` needs effect
    rendering to exist at all first (a bigger, separate gap); `fontRef` is a smaller, self-contained
    addition — a run/paragraph with no resolved colour of its own could fall back to its shape's
    `fontRef`'s colour before defaulting to black, in `@pptx2html/presentation`'s
    `resolveEffectiveRunProperties` chain (`resolve/text-style.ts`).
-7. Wiring a connector's own `p:style` (already parsed, `ShapeStyle` is on `ConnectionShape` too)
-   into whatever connector line rendering eventually lands (see item 2 above) — today it's parsed
+8. Wiring a connector's own `p:style` (already parsed, `ShapeStyle` is on `ConnectionShape` too)
+   into whatever connector line rendering eventually lands (see item 3 above) — today it's parsed
    but unused, since `renderConnector` doesn't call `applyFill`/`applyLine`/`effectiveFill`/
    `effectiveLine` at all yet.
-8. `apps/web-demo` now renders the parsed presentation into the page (see its own source) —
-   confirm this still looks right whenever this package's DOM structure changes.
+9. `apps/web-demo` now renders the parsed presentation into the page (see its own source) —
+   confirm this still looks right whenever this package's DOM structure changes, and now also
+   gains a working slideshow (click/keyboard navigation) for free once it re-renders with this
+   change, since `renderPresentation`'s returned element already wires it up.
