@@ -19,10 +19,15 @@ byte streams into it end-to-end (see `packages/reader/CLAUDE.md`), and
 `@pptx2html/to-html5` renders the result into a laid-out, responsively-scaled HTML5 DOM
 with several formatting passes done (font inheritance including alignment — typeface/
 size/bold/italic/underline/strike/color/alignment, all resolved through the full
-placeholder/master/theme chain; shape/picture fill/line, including PowerPoint's Shape
-Styles gallery `p:style` fillRef/lnRef fallback via `FormatScheme.fillStyles`/`.lineStyles`;
+placeholder/master/theme chain, including a shape's own `p:style/fontRef` — the colour/typeface
+default PowerPoint's Shape Styles gallery relies on, ranked _above_ the generic master/placeholder
+chain but below the shape's own list style/paragraph/run formatting, so it doesn't lose to (say) a
+master's `otherStyle` default the way a naive "last resort" ranking would; shape/picture fill/line,
+including that same Shape
+Styles gallery's `p:style` fillRef/lnRef fallback via `FormatScheme.fillStyles`/`.lineStyles`;
 a common subset of preset shape geometry; slide background; bulleted and numbered lists,
-including auto-numbering schemes and indentation). The inheritance-walking logic behind all of
+including auto-numbering schemes and indentation; a text body's effective vertical anchor,
+§21.1.2.1.1's `a:bodyPr/@anchor`). The inheritance-walking logic behind all of
 that — except the shape-geometry/CSS-formatting half, which is genuinely renderer-specific —
 now lives in this package's own `resolve/` directory (see Layout below), not `to-html5`'s;
 `to-html5` calls it and formats the result as DOM/CSS. Table cell fill and table styles are the
@@ -114,7 +119,12 @@ itself defines.
   (`ShapeStyle`/`StyleMatrixReference` — a shape/picture/connector's optional `p:style`
   `fillRef`/`lnRef`, each a 1-based index into `FormatScheme.fillStyles`/`.lineStyles` plus a
   `Color` that substitutes for that style's `phClr` placeholder; resolving the substitution is
-  `resolve/style-matrix.ts`'s job, below), `table.ts`,
+  `resolve/style-matrix.ts`'s job, below — plus `FontReference` — `ShapeStyle.fontRef`, a
+  reference to the theme's major/minor font collection (`FontCollectionIndex`, `"major"`/
+  `"minor"`/`"none"` — unlike `fillRef`/`lnRef` this isn't a style-matrix index) plus the same
+  kind of `phClr`-substituted fallback colour; resolving _this_ substitution is
+  `resolve/text-style.ts`'s job, folded into `resolveEffectiveRunProperties`'s `levelChain` above
+  the master/placeholder chain but below the shape's own list style, below), `table.ts`,
   `common-slide-data.ts` (`CommonSlideData`/`Background`, shared by every
   slide-like part), `animation.ts` (`SlideTiming`/`TimeNode`/`BuildListEntry` — a slide's optional
   `p:timing`, consumed by `Slide.timing` in `slide.ts`; see the design-decision note above for why
@@ -132,7 +142,15 @@ itself defines.
   `resolveEffectiveBullet`/`resolveEffectiveIndent`/`resolveTypeface` — the run/paragraph → shape
   → placeholder layout/master → master category style → presentation default → theme font-scheme
   chain, §21.1.2, plus the `TextStyleContext` type a renderer's own per-slide context can extend
-  rather than duplicate), `background.ts` (`resolveEffectiveBackground` — slide → layout → master,
+  rather than duplicate; `resolveEffectiveRunProperties` additionally takes an optional
+  `ShapeStyle`, folding its `fontRef` (§20.1.4.1.17) into `levelChain` as its own rung, ranked
+  _above_ the master/placeholder chain but _below_ the shape's own list style — a plain autoshape's
+  quick-style colour/typeface default is more specific than a generic master template default, but
+  still loses to anything the shape's own text actually formats — and `resolveEffectiveAnchor` — a
+  `TextBody`'s effective vertical anchor, §21.1.2.1.1's `a:bodyPr/@anchor`, own value first then the
+  same placeholder
+  layout→master walk `resolveInheritedTransform` does, defaulting to `'t'`), `background.ts`
+  (`resolveEffectiveBackground` — slide → layout → master,
   §19.3.1.7), `style-matrix.ts` (`resolveStyleFill`/`resolveStyleLine` — a `p:style` `fillRef`/
   `lnRef` resolved against `FormatScheme`, `phClr` substitution included, §20.1.4.2.10/2.12),
   `bullet.ts` (`formatAutoNumber`/`NumberingState` — auto-number label formatting and the
@@ -224,7 +242,13 @@ nothing here needs one): `placeholder.test.ts` covers `resolveInheritedTransform
 type-only-fallback/master-fallback/no-match cases; `text-style.test.ts` covers the full
 `levelChain` walk (every rung from `defaultTextStyle` down to a run's own `rPr`/a paragraph's own
 `algn`/bullet/`marL`/`indent`, plus theme font-token resolution) via
-`TextStyleContext`-constructed fixtures rather than a renderer's own richer context type;
+`TextStyleContext`-constructed fixtures rather than a renderer's own richer context type, plus
+`resolveEffectiveRunProperties`'s `fontRef` rung (outranks the presentation's default text style
+_and_ the master's title/body/other category style — the case a real deck's `otherStyle` almost
+always exercises, since it typically sets an explicit colour at level 0 — but still loses to the
+shape's own list style or the run's own formatting, and a `'none'` collection contributes no
+typeface) and `resolveEffectiveAnchor`'s own-value/layout/master placeholder-inheritance chain,
+mirroring `resolveInheritedTransform`'s own tests;
 `background.test.ts` covers the slide→layout→master fallback chain; `style-matrix.test.ts` covers
 `phClr` substitution (including through gradient stops) and the out-of-range/missing-reference
 cases; `bullet.test.ts` covers `formatAutoNumber`'s ten schemes and `NumberingState`'s

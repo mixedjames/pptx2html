@@ -4,12 +4,20 @@ import { IDENTITY_MAP, resolveEffectiveBackground } from '@pptx2html/presentatio
 import { applyFill } from './fill.js';
 import type { RenderContext } from './render-context.js';
 import { renderShapeTreeNode } from './shape-tree.js';
+import { UnsupportedFeatureCollector } from './unsupported-features.js';
 
+/**
+ * `slideIndex`/`unsupportedFeatures` are optional (defaulting to 0 and a throwaway collector) so
+ * callers that don't care about the unsupported-feature log — chiefly this file's own tests —
+ * don't need to supply them.
+ */
 export function renderSlide(
   doc: Document,
   slide: Slide,
   slideSize: SlideSize,
   defaultTextStyle?: TextListStyle,
+  slideIndex = 0,
+  unsupportedFeatures: UnsupportedFeatureCollector = new UnsupportedFeatureCollector(),
 ): HTMLElement {
   const el = doc.createElement('div');
   el.className = 'pptx-slide';
@@ -29,7 +37,13 @@ export function renderSlide(
   const background = resolveEffectiveBackground(slide);
   if (background) applyFill(el, background.fill, slide.layout.master.theme.colorScheme);
 
-  const context: RenderContext = { slideSize, layout: slide.layout, defaultTextStyle };
+  const context: RenderContext = {
+    slideSize,
+    layout: slide.layout,
+    defaultTextStyle,
+    reportUnsupported: (code, message, shape) =>
+      unsupportedFeatures.report({ code, message, slideIndex, shape }),
+  };
   for (const node of slide.commonSlideData.shapeTree) {
     el.appendChild(renderShapeTreeNode(doc, node, IDENTITY_MAP, context));
   }

@@ -15,11 +15,13 @@ import type {
   ShapeStyle,
   ShapeTreeNode,
   SlideLayout,
+  TextAnchor,
   Transform2D,
 } from '@pptx2html/presentation';
 import {
   composeGroupMap,
   computeBox,
+  resolveEffectiveAnchor,
   resolveInheritedTransform,
   resolveStyleFill,
   resolveStyleLine,
@@ -135,6 +137,24 @@ function effectiveLine(
   return properties.line ?? resolveStyleLine(style?.lineRef, formatScheme);
 }
 
+/**
+ * Maps a text body's effective vertical anchor (`resolveEffectiveAnchor`) to the flex
+ * `justify-content` value `renderShape` uses to position `.pptx-text-body` within the shape's own
+ * box. `'just'` (anchor-justified — distributing multiple paragraphs to fill the box) has no
+ * single-block flexbox equivalent, so it's approximated as top-anchored, same as the default.
+ */
+function justifyContentForAnchor(anchor: TextAnchor): string {
+  switch (anchor) {
+    case 'ctr':
+      return 'center';
+    case 'b':
+      return 'flex-end';
+    case 't':
+    case 'just':
+      return 'flex-start';
+  }
+}
+
 function renderShape(
   doc: Document,
   shape: Shape,
@@ -161,12 +181,33 @@ function renderShape(
     );
   } else {
     const radius = geometry && nativeBorderRadius(geometry);
-    if (radius) el.style.borderRadius = radius;
+    if (radius) {
+      el.style.borderRadius = radius;
+    } else if (geometry && !(geometry.type === 'preset' && geometry.preset === 'rect')) {
+      // Neither presetShapePath nor nativeBorderRadius modeled this geometry (an unmodeled
+      // preset, or custGeom) — the shape below falls back to a plain rectangle.
+      context.reportUnsupported?.(
+        'shape-geometry-unmodeled',
+        geometry.type === 'custom'
+          ? 'Custom geometry (a:custGeom) is not rendered; falling back to a rectangle.'
+          : `Preset geometry "${geometry.preset}" is not rendered; falling back to a rectangle.`,
+        shape.nonVisual,
+      );
+    }
     applyFill(el, fill, scheme);
     applyLine(el, line, scheme, context.slideSize.width);
   }
   if (shape.textBody) {
-    el.appendChild(renderTextBody(doc, shape.textBody, shape.nonVisual.placeholder, context));
+    const anchor = resolveEffectiveAnchor(shape.textBody, shape.nonVisual.placeholder, context);
+    // Vertically positions `.pptx-text-body` within the shape's own box via flexbox — absolutely
+    // positioned children (the SVG outline overlay above) are excluded from flex layout entirely,
+    // so this is safe to set regardless of which fill/outline path was taken above.
+    el.style.display = 'flex';
+    el.style.flexDirection = 'column';
+    el.style.justifyContent = justifyContentForAnchor(anchor);
+    el.appendChild(
+      renderTextBody(doc, shape.textBody, shape.nonVisual.placeholder, context, shape.style),
+    );
   }
   return el;
 }
@@ -237,6 +278,11 @@ function renderGraphicFrame(
   if (frame.graphic.type === 'table') {
     el.appendChild(renderTable(doc, frame.graphic, context));
   } else {
+    context.reportUnsupported?.(
+      'graphic-placeholder-unmodeled',
+      `${frame.graphic.type} content is not rendered; showing a "[${frame.graphic.type}]" placeholder instead.`,
+      frame.nonVisual,
+    );
     const placeholder = doc.createElement('div');
     placeholder.className = 'pptx-graphic-placeholder';
     placeholder.textContent = `[${frame.graphic.type}]`;

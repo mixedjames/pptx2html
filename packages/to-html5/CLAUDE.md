@@ -322,6 +322,56 @@ otherwise resolve, and the blank line neither consumes a number (`numbering.next
 running list (`numbering.break`) — so a numbered list interrupted by a blank paragraph still
 resumes its count correctly on the far side, rather than restarting at 1.
 
+## Key design decision: fontRef text-colour/typeface fallback lives in `resolveEffectiveRunProperties`, not a new resolver
+
+A run with no colour/typeface of its own relies on the shape's own `p:style/fontRef`
+(§20.1.4.1.17) for a default, which is what PowerPoint's Shape Styles gallery writes by default.
+Rather than a separate resolver alongside `resolveStyleFill`/`resolveStyleLine` (the `fillRef`/
+`lnRef` equivalent, `style-matrix.ts`), `@pptx2html/presentation`'s `resolveEffectiveRunProperties`
+now takes an optional `ShapeStyle` argument and folds `fontRef`'s colour (as a `SolidFill`) and
+font collection (as the same `+mj-lt`/`+mn-lt` theme token `resolveTypeface` already resolves — no
+new font-resolution mechanism needed) into `levelChain` as its own rung, ranked **above** the
+master/placeholder chain (`context.defaultTextStyle`, the master's title/body/other category style,
+and any matching placeholder's own list style) but **below** the shape's own list style and the
+paragraph/run's own formatting.
+
+That ranking is deliberate, not the more obvious "last resort, loses to everything" — and getting
+it backwards was an actual bug caught via `apps/web-demo/src/Presentation1.pptx`: a plain autoshape
+(no `p:ph`) falls back to the master's `otherStyle` category for its text defaults, and a real
+Office theme's `otherStyle` level 0 almost always sets an explicit `solidFill`/`typeface` (it's the
+generic "any text box" default). If `fontRef` were ranked below that — as it originally was — the
+master's generic dark colour would always clobber the shape's own, deliberately-chosen `fontRef`
+colour (typically a light colour meant to contrast with the shape's own fill), which is backwards
+from what PowerPoint itself renders: a shape's own directly-authored quick style is more specific
+than a generic template default and should win, only losing to formatting actually applied to that
+shape's own text. See `packages/presentation/CLAUDE.md`'s `levelChain` doc comment for the exact
+rung ordering.
+
+`renderRun`/`renderBulletSpan`'s ambient-run-properties call both take the rendering shape's own
+`style` and pass it through for this reason (`text.ts`, `shape-tree.ts`'s `renderShape`). A shape
+with an explicit `spPr` fill/line but no run colour of its own still gets this fallback correctly —
+`fontRef` and `fillRef`/`lnRef` are independent references on the same `p:style`, not a single
+all-or-nothing switch.
+
+## Key design decision: a shape's text body is vertically anchored via flexbox
+
+`a:bodyPr/@anchor` (§21.1.2.1.1 — top/center/bottom/justified) was previously read by the reader
+into `TextBody.properties.anchor` but never consulted here at all, so text always rendered flush at
+the top of a shape's box regardless of what the deck authored — visibly wrong for anything that
+isn't top-anchored, e.g. a number centered inside a small circle. `renderShape` (`shape-tree.ts`)
+now resolves the effective anchor via `@pptx2html/presentation`'s new `resolveEffectiveAnchor`
+(own value, else the matching placeholder's own `bodyPr` in the layout then the master, else `'t'`)
+and sets `display: flex; flex-direction: column; justify-content: <mapped>` on the shape's own div
+before appending `.pptx-text-body` — `justify-content` rather than `align-items`/`align-content`
+since the anchor axis is the block (vertical) axis in a column-direction flex container. This is
+safe to set unconditionally alongside the SVG preset-outline overlay some shapes also get: an SVG
+element positioned `absolute` (as that overlay always is) is excluded from flex layout entirely, so
+turning the shape div into a flex container never disturbs it. `'just'` (anchor-justified —
+distributing multiple paragraphs to fill the box) has no single-block flexbox equivalent and is
+approximated as top-anchored (`justifyContentForAnchor`'s own doc comment) — this renderer doesn't
+distribute paragraph spacing to fill a box the way real anchor-justified text does, a much rarer
+case than plain top/center/bottom anchoring.
+
 ## Key design decision: absolute sizes (font size, border width) scale via CSS container query units, not JS
 
 Font size and border width are the first _magnitudes_ this renderer introduces that aren't
@@ -511,15 +561,16 @@ follow-up (see the scope boundary below), not implemented as a distinct path yet
   the plain `border-radius` an `<img>` supports directly; deferred since `rect`/`roundRect`/
   `ellipse` covers the overwhelming majority of real picture crops.
 - **Style-matrix resolution (`@pptx2html/presentation`'s `resolve/style-matrix.ts`) only covers
-  `fillRef`/`lnRef`.** `effectRef`
-  (a shape's effect style, e.g. shadow) and `fontRef` (its default text colour when a run doesn't
-  set one) are unmodeled, matching `ShapeStyle`'s own scope in `packages/presentation` — neither
-  effect rendering nor a fontRef-colour text fallback exist yet. `renderConnector` doesn't call
-  `effectiveFill`/`effectiveLine` at all (it doesn't call `applyFill`/`applyLine` either, see
-  connectors below), so a connector's own `p:style` (parsed, since `ShapeStyle` is on
-  `ConnectionShape` too) currently goes unused. `resolveStyleFill`/`resolveStyleLine`'s `phClr`
-  substitution is also a flat-field transform merge, not a spec-accurate ordered composition — see
-  that file's own doc comment.
+  `fillRef`/`lnRef`; `fontRef` (its default text colour/typeface fallback) is now resolved too, but
+  via a different mechanism** — see "Key design decision: fontRef text-colour/typeface fallback"
+  below. `effectRef` (a shape's effect style, e.g. shadow) remains unmodeled, matching
+  `ShapeStyle`'s own remaining scope gap in `packages/presentation` — no effect rendering exists
+  yet. `renderConnector` doesn't call `effectiveFill`/`effectiveLine` at all (it doesn't call
+  `applyFill`/`applyLine` either, see connectors below), so a connector's own `p:style` (parsed,
+  since `ShapeStyle` is on `ConnectionShape` too) currently goes unused — including its `fontRef`,
+  though a connector never has a `textBody` in the schema, so this is moot in practice.
+  `resolveStyleFill`/`resolveStyleLine`'s `phClr` substitution is also a flat-field transform
+  merge, not a spec-accurate ordered composition — see that file's own doc comment.
 - **Pattern fills are only approximated**, and colour transforms on preset colours are ignored —
   see `fill.ts`'s and `@pptx2html/presentation`'s `resolve/color.ts`'s own doc comments for why. The hatch overlay's own spacing
   (`2px`/`8px` in the `repeating-linear-gradient`) is also a fixed px, not `cqw` — it's a purely
@@ -535,9 +586,10 @@ follow-up (see the scope boundary below), not implemented as a distinct path yet
   `ST_TextAutonumberScheme` variants are unmodeled** — see `packages/presentation/CLAUDE.md`'s
   scope boundary; `buSzPct` and the ten common schemes `AutoNumberScheme` models cover the
   overwhelming majority of real decks.
-- **Remaining visual formatting**: `TextBodyProperties.anchor`/`wrap`, table cell fill, table
-  styles. The DOM structure exists (`.pptx-shape`, `.pptx-paragraph`, `.pptx-run`, etc.) precisely
-  so a later pass can add CSS without restructuring.
+- **Remaining visual formatting**: `TextBodyProperties.wrap`, table cell fill, table
+  styles — `anchor` (vertical text alignment) is now handled, see "Key design decision: a shape's
+  text body is vertically anchored via flexbox" below. The DOM structure exists (`.pptx-shape`,
+  `.pptx-paragraph`, `.pptx-run`, etc.) precisely so a later pass can add CSS without restructuring.
 - **Placeholder inheritance is supported, but with a simplified matching rule.** See
   `@pptx2html/presentation`'s `resolve/placeholder.ts`. Not modeled: the spec's type-equivalence groups (e.g. a slide's
   `ctrTitle` placeholder is allowed to match a layout's `title` placeholder) — only exact type
@@ -623,7 +675,13 @@ explicit `spPr` fill wins outright over a style reference when both are present,
 fill still feeds the SVG preset-geometry path (not just the CSS `applyFill` one), and a shape with
 neither an `spPr` fill/line nor a style reference stays unstyled. `slide.test.ts` has the equivalent
 fill/line
-integration check for `resolveEffectiveBackground` being applied by `renderSlide`. `text.test.ts`'s "bullets and
+integration check for `resolveEffectiveBackground` being applied by `renderSlide`. Its new "text body
+anchor and fontRef fallback" block covers `justify-content: center`/`flex-end`/`flex-start` for
+`anchor="ctr"`/`"b"`/absent respectively, and a run with no colour of its own picking up its
+shape's `p:style/fontRef` colour end-to-end through `renderShapeTreeNode` — `resolveEffectiveAnchor`
+and `resolveEffectiveRunProperties`'s `fontRef` ranking (above the master/placeholder chain, below
+the shape's own list style) are each covered directly, DOM-free, by
+`packages/presentation/src/resolve/text-style.test.ts`. `text.test.ts`'s "bullets and
 numbering" block covers char-bullet rendering (glyph, own font/colour), sequential auto-numbering
 across sibling paragraphs, a nested sub-list restarting and the outer list resuming its count
 after, an explicit `buNone` suppressing a bullet inherited from the shape's own list style, the
@@ -692,7 +750,8 @@ while a transition is in flight and succeeding again once it elapses, and the ex
    `docs/scroll-driven-playback.md` before picking up either of the two items above, since the same
    constraints (duration logic stays in `@pptx2html/presentation`, prefer WAAPI over plain CSS
    `transition`/`@keyframes`) apply to them too.
-2. `TextBodyProperties.anchor`/`wrap` → flex/white-space, table cell fill, table styles.
+2. `TextBodyProperties.wrap` → `white-space`, table cell fill, table styles — `anchor` is now done
+   (see "Key design decision: a shape's text body is vertically anchored via flexbox" above).
 3. Connector line rendering (see the scope boundary above) — likely an SVG line/path overlay
    sized to the connector's own box, reusing `applyLine`'s color/width/dash resolution but not its
    `border-*` output. `shape-tree.ts`'s new `renderShapeOutline` (an `<svg>` sized to a shape's own
@@ -708,11 +767,10 @@ while a transition is in flight and succeeding again once it elapses, and the ex
 6. Clipping a picture to one of `shape-geometry.ts`'s nine SVG-path presets (not just `roundRect`/
    `ellipse`'s native `border-radius`) — needs an `<svg><image>` + `<clipPath>` overlay in place of
    the plain `<img>` `renderPicture` emits today.
-7. `p:style/effectRef` and `fontRef` (see the scope boundary above) — `effectRef` needs effect
-   rendering to exist at all first (a bigger, separate gap); `fontRef` is a smaller, self-contained
-   addition — a run/paragraph with no resolved colour of its own could fall back to its shape's
-   `fontRef`'s colour before defaulting to black, in `@pptx2html/presentation`'s
-   `resolveEffectiveRunProperties` chain (`resolve/text-style.ts`).
+7. `p:style/effectRef` (see the scope boundary above) needs effect rendering to exist at all
+   first (a bigger, separate gap) — `fontRef` is done, see "Key design decision: fontRef
+   text-colour/typeface fallback lives in `resolveEffectiveRunProperties`, not a new resolver"
+   above.
 8. Wiring a connector's own `p:style` (already parsed, `ShapeStyle` is on `ConnectionShape` too)
    into whatever connector line rendering eventually lands (see item 3 above) — today it's parsed
    but unused, since `renderConnector` doesn't call `applyFill`/`applyLine`/`effectiveFill`/

@@ -3,6 +3,7 @@ import type {
   Paragraph,
   PlaceholderType,
   Shape,
+  ShapeStyle,
   SlideLayout,
   SlideMaster,
   TextBody,
@@ -11,6 +12,7 @@ import type {
 import { describe, expect, it } from 'vitest';
 import {
   resolveEffectiveAlignment,
+  resolveEffectiveAnchor,
   resolveEffectiveRunProperties,
   resolveTypeface,
   type TextStyleContext,
@@ -207,6 +209,180 @@ describe('resolveEffectiveRunProperties', () => {
         contextFor(undefined),
       ),
     ).toEqual({ fontSize: 1600 });
+  });
+
+  it("falls back to the shape's own p:style fontRef when nothing else in the chain sets a colour/typeface", () => {
+    const shapeStyle: ShapeStyle = {
+      fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } },
+    };
+    expect(
+      resolveEffectiveRunProperties(
+        run,
+        paragraph,
+        emptyTextBody,
+        undefined,
+        contextFor(undefined),
+        shapeStyle,
+      ),
+    ).toEqual({
+      fill: { type: 'solid', color: { type: 'scheme', value: 'lt1' } },
+      typeface: '+mn-lt',
+    });
+  });
+
+  it('contributes no typeface for fontRef collection "none"', () => {
+    const shapeStyle: ShapeStyle = {
+      fontRef: { collection: 'none', color: { type: 'scheme', value: 'dk1' } },
+    };
+    expect(
+      resolveEffectiveRunProperties(
+        run,
+        paragraph,
+        emptyTextBody,
+        undefined,
+        contextFor(undefined),
+        shapeStyle,
+      ),
+    ).toEqual({ fill: { type: 'solid', color: { type: 'scheme', value: 'dk1' } } });
+  });
+
+  it("outranks the presentation's own default text style (a generic template default, less specific than the shape's own quick style)", () => {
+    const shapeStyle: ShapeStyle = {
+      fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } },
+    };
+    const context = contextFor(undefined, {
+      levels: [{ runProperties: { fontSize: 1800, typeface: 'Georgia' } }],
+    });
+    expect(
+      resolveEffectiveRunProperties(run, paragraph, emptyTextBody, undefined, context, shapeStyle),
+    ).toEqual({
+      fill: { type: 'solid', color: { type: 'scheme', value: 'lt1' } },
+      fontSize: 1800,
+      typeface: '+mn-lt',
+    });
+  });
+
+  it("outranks the master's otherStyle for a non-placeholder shape — the exact real-world case this priority was fixed for (otherStyle almost always sets an explicit dark colour PowerPoint itself doesn't let it clobber a shape's own quick-style colour)", () => {
+    const m = master([], {
+      otherStyle: {
+        levels: [
+          { runProperties: { fill: { type: 'solid', color: { type: 'scheme', value: 'tx1' } } } },
+        ],
+      },
+    });
+    const l: SlideLayout = { commonSlideData: { shapeTree: [] }, master: m, type: 'blank' };
+    const shapeStyle: ShapeStyle = {
+      fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } },
+    };
+    expect(
+      resolveEffectiveRunProperties(
+        run,
+        paragraph,
+        emptyTextBody,
+        undefined,
+        contextFor(l),
+        shapeStyle,
+      ),
+    ).toEqual({
+      fill: { type: 'solid', color: { type: 'scheme', value: 'lt1' } },
+      typeface: '+mn-lt',
+    });
+  });
+
+  it("loses to the shape's own list style", () => {
+    const shapeStyle: ShapeStyle = {
+      fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } },
+    };
+    const shapeTextBody: TextBody = {
+      paragraphs: [paragraph],
+      listStyle: {
+        levels: [
+          { runProperties: { fill: { type: 'solid', color: { type: 'scheme', value: 'dk1' } } } },
+        ],
+      },
+    };
+    expect(
+      resolveEffectiveRunProperties(
+        run,
+        paragraph,
+        shapeTextBody,
+        undefined,
+        contextFor(undefined),
+        shapeStyle,
+      ),
+    ).toEqual({
+      fill: { type: 'solid', color: { type: 'scheme', value: 'dk1' } },
+      typeface: '+mn-lt',
+    });
+  });
+
+  it("loses to the run's own explicit colour", () => {
+    const shapeStyle: ShapeStyle = {
+      fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } },
+    };
+    const styledRun: TextRunElement = {
+      kind: 'run',
+      text: 'Hi',
+      properties: { fill: { type: 'solid', color: { type: 'scheme', value: 'dk1' } } },
+    };
+    expect(
+      resolveEffectiveRunProperties(
+        styledRun,
+        paragraph,
+        emptyTextBody,
+        undefined,
+        contextFor(undefined),
+        shapeStyle,
+      ),
+    ).toEqual({
+      fill: { type: 'solid', color: { type: 'scheme', value: 'dk1' } },
+      typeface: '+mn-lt',
+    });
+  });
+});
+
+describe('resolveEffectiveAnchor', () => {
+  it('defaults to "t" (top) when nothing sets an anchor anywhere', () => {
+    expect(resolveEffectiveAnchor(emptyTextBody, undefined, contextFor(undefined))).toBe('t');
+  });
+
+  it('uses its own bodyPr anchor when set', () => {
+    const textBody: TextBody = { paragraphs: [], properties: { anchor: 'ctr' } };
+    expect(resolveEffectiveAnchor(textBody, undefined, contextFor(undefined))).toBe('ctr');
+  });
+
+  it("inherits the matching placeholder's anchor from the layout, then the master", () => {
+    const masterPlaceholder = placeholderShape(20, 'body', 1, {
+      paragraphs: [],
+      properties: { anchor: 'b' },
+    });
+    const layoutOnly = layout([], [masterPlaceholder]);
+    expect(
+      resolveEffectiveAnchor(emptyTextBody, { type: 'body', index: 1 }, contextFor(layoutOnly)),
+    ).toBe('b');
+
+    const layoutPlaceholder = placeholderShape(10, 'body', 1, {
+      paragraphs: [],
+      properties: { anchor: 'ctr' },
+    });
+    const withLayoutOverride = layout([layoutPlaceholder], [masterPlaceholder]);
+    expect(
+      resolveEffectiveAnchor(
+        emptyTextBody,
+        { type: 'body', index: 1 },
+        contextFor(withLayoutOverride),
+      ),
+    ).toBe('ctr');
+  });
+
+  it("prefers the shape's own anchor over placeholder inheritance", () => {
+    const layoutPlaceholder = placeholderShape(10, 'body', 1, {
+      paragraphs: [],
+      properties: { anchor: 'ctr' },
+    });
+    const l = layout([layoutPlaceholder]);
+    const textBody: TextBody = { paragraphs: [], properties: { anchor: 't' } };
+    expect(resolveEffectiveAnchor(textBody, { type: 'body', index: 1 }, contextFor(l))).toBe('t');
   });
 });
 

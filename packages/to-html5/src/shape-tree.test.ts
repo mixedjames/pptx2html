@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
-import type { FormatScheme, Picture, Shape, SlideLayout } from '@pptx2html/presentation';
+import type {
+  FormatScheme,
+  GraphicFrame,
+  Picture,
+  Shape,
+  SlideLayout,
+} from '@pptx2html/presentation';
 import { IDENTITY_MAP } from '@pptx2html/presentation';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RenderContext } from './render-context.js';
 import { renderShapeTreeNode } from './shape-tree.js';
 
@@ -253,5 +259,147 @@ describe('renderShapeTreeNode style-matrix (p:style) fallback', () => {
       contextWithFormatScheme(FORMAT_SCHEME),
     );
     expect(el.style.backgroundColor).toBe('');
+  });
+});
+
+describe('renderShapeTreeNode text body anchor and fontRef fallback', () => {
+  function shapeWithText(anchor: 't' | 'ctr' | 'b' | undefined): Shape {
+    return {
+      kind: 'shape',
+      nonVisual: { id: 14, name: 'Oval 1' },
+      properties: {},
+      style: { fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } } },
+      textBody: {
+        ...(anchor ? { properties: { anchor } } : {}),
+        paragraphs: [{ runs: [{ kind: 'run', text: '42' }] }],
+      },
+    };
+  }
+
+  it('vertically centers the text body via flexbox when bodyPr anchor="ctr"', () => {
+    const el = renderShapeTreeNode(document, shapeWithText('ctr'), IDENTITY_MAP, CONTEXT);
+    expect(el.style.display).toBe('flex');
+    expect(el.style.flexDirection).toBe('column');
+    expect(el.style.justifyContent).toBe('center');
+  });
+
+  it('defaults to top-anchored (flex-start) when bodyPr has no anchor', () => {
+    const el = renderShapeTreeNode(document, shapeWithText(undefined), IDENTITY_MAP, CONTEXT);
+    expect(el.style.justifyContent).toBe('flex-start');
+  });
+
+  it('bottom-anchors via flex-end for anchor="b"', () => {
+    const el = renderShapeTreeNode(document, shapeWithText('b'), IDENTITY_MAP, CONTEXT);
+    expect(el.style.justifyContent).toBe('flex-end');
+  });
+
+  it("falls back to the shape's own p:style fontRef colour for a run with none of its own", () => {
+    const el = renderShapeTreeNode(
+      document,
+      shapeWithText('ctr'),
+      IDENTITY_MAP,
+      contextWithFormatScheme({ name: 'Office', fillStyles: [], lineStyles: [] }),
+    );
+    const run = el.querySelector('.pptx-run') as HTMLElement;
+    expect(run.textContent).toBe('42');
+    expect(run.style.color).toBe('rgb(255, 255, 255)'); // lt1, per contextWithFormatScheme's theme
+  });
+});
+
+describe('renderShapeTreeNode unsupported-feature reporting', () => {
+  function contextWithReport(): {
+    context: RenderContext;
+    reportUnsupported: ReturnType<typeof vi.fn>;
+  } {
+    const reportUnsupported = vi.fn();
+    return {
+      context: { ...CONTEXT, reportUnsupported },
+      reportUnsupported,
+    };
+  }
+
+  it("reports an unmodeled preset falling back to a rectangle, with the shape's own id/name", () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const shape: Shape = {
+      kind: 'shape',
+      nonVisual: { id: 20, name: 'Cloud 1' },
+      properties: { geometry: { type: 'preset', preset: 'cloud' } },
+    };
+
+    renderShapeTreeNode(document, shape, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'shape-geometry-unmodeled',
+      expect.stringContaining('"cloud"'),
+      { id: 20, name: 'Cloud 1' },
+    );
+  });
+
+  it('reports custom geometry (custGeom) distinctly from an unmodeled preset', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const shape: Shape = {
+      kind: 'shape',
+      nonVisual: { id: 21, name: 'Freeform 1' },
+      properties: { geometry: { type: 'custom' } },
+    };
+
+    renderShapeTreeNode(document, shape, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'shape-geometry-unmodeled',
+      expect.stringContaining('custGeom'),
+      { id: 21, name: 'Freeform 1' },
+    );
+  });
+
+  it('does not report for a plain rect, or a preset covered by an SVG path/border-radius', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    for (const geometry of [
+      { type: 'preset' as const, preset: 'rect' },
+      { type: 'preset' as const, preset: 'ellipse' },
+      { type: 'preset' as const, preset: 'triangle' },
+      undefined,
+    ]) {
+      const shape: Shape = {
+        kind: 'shape',
+        nonVisual: { id: 22, name: 'Shape' },
+        properties: { geometry },
+      };
+      renderShapeTreeNode(document, shape, IDENTITY_MAP, context);
+    }
+
+    expect(reportUnsupported).not.toHaveBeenCalled();
+  });
+
+  it('reports an unrendered graphic (chart/smartArt/oleObject) placeholder', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const frame: GraphicFrame = {
+      kind: 'graphicFrame',
+      nonVisual: { id: 23, name: 'Chart 1' },
+      transform: { offset: { x: 0, y: 0 }, extents: { width: 1, height: 1 } },
+      graphic: { type: 'chart' },
+    };
+
+    renderShapeTreeNode(document, frame, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'graphic-placeholder-unmodeled',
+      expect.stringContaining('chart'),
+      { id: 23, name: 'Chart 1' },
+    );
+  });
+
+  it('does not report for a table graphicFrame', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const frame: GraphicFrame = {
+      kind: 'graphicFrame',
+      nonVisual: { id: 24, name: 'Table 1' },
+      transform: { offset: { x: 0, y: 0 }, extents: { width: 1, height: 1 } },
+      graphic: { type: 'table', columns: [], rows: [] },
+    };
+
+    renderShapeTreeNode(document, frame, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).not.toHaveBeenCalled();
   });
 });

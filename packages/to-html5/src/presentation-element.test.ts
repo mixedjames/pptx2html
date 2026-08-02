@@ -458,6 +458,37 @@ describe('PptxPresentationElement', () => {
       expect(recordedAnimations).toHaveLength(0);
     });
 
+    it('reports an unsupported effect kind to the unsupported-features log, keyed to that slide', () => {
+      const presentation = buildPresentation([
+        undefined,
+        { effect: { kind: 'wipe', direction: 'l' } },
+      ]);
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      const unsupportedFeatures = el.render(presentation);
+
+      expect(unsupportedFeatures.all).toEqual([
+        {
+          code: 'transition-effect-unmodeled',
+          message:
+            'Slide transition effect "wipe" is not animated; falling back to an instant swap.',
+          slideIndex: 1,
+        },
+      ]);
+      expect(unsupportedFeatures.bySlide.get(1)).toHaveLength(1);
+    });
+
+    it('does not report push/fade transitions, or a slide with no transition at all', () => {
+      const presentation = buildPresentation([
+        undefined,
+        { effect: { kind: 'push', direction: 'l' } },
+        { effect: { kind: 'fade' } },
+      ]);
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      const unsupportedFeatures = el.render(presentation);
+
+      expect(unsupportedFeatures.all).toHaveLength(0);
+    });
+
     it('ignores navigation entirely while a transition is in flight', async () => {
       const presentation = buildPresentation([undefined, { effect: { kind: 'fade' } }, undefined]);
       const el = document.createElement('pptx-presentation') as PptxPresentationElement;

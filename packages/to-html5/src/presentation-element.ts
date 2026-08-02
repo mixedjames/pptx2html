@@ -6,6 +6,7 @@ import type {
 } from '@pptx2html/presentation';
 import { resolveTransitionDurationMs } from '@pptx2html/presentation';
 import { renderSlide } from './slide.js';
+import { UnsupportedFeatureCollector } from './unsupported-features.js';
 
 const STYLES = `
   :host {
@@ -111,13 +112,35 @@ export class PptxPresentationElement extends HTMLElement {
     if (!this.hasAttribute('tabindex')) this.tabIndex = 0;
   }
 
-  render(presentation: Presentation): void {
+  /** Returns the set of `.pptx`-authored features this render didn't (fully) support. */
+  render(presentation: Presentation): UnsupportedFeatureCollector {
     for (const animation of this.#currentAnimations) animation.cancel();
     this.#currentAnimations = [];
-    this.#slides = presentation.slides.map((slide) =>
-      renderSlide(this.ownerDocument, slide, presentation.slideSize, presentation.defaultTextStyle),
+    const unsupportedFeatures = new UnsupportedFeatureCollector();
+    this.#slides = presentation.slides.map((slide, slideIndex) =>
+      renderSlide(
+        this.ownerDocument,
+        slide,
+        presentation.slideSize,
+        presentation.defaultTextStyle,
+        slideIndex,
+        unsupportedFeatures,
+      ),
     );
     this.#transitions = presentation.slides.map((slide) => slide.transition);
+    // Detected here, not in goToSlide: goToSlide only runs a slide's transition once the user
+    // actually navigates into it, but the log should surface every unsupported transition up
+    // front, whether or not that slide is ever visited during this session.
+    presentation.slides.forEach((slide, slideIndex) => {
+      const kind = slide.transition?.effect?.kind;
+      if (kind && kind !== 'push' && kind !== 'fade') {
+        unsupportedFeatures.report({
+          code: 'transition-effect-unmodeled',
+          message: `Slide transition effect "${kind}" is not animated; falling back to an instant swap.`,
+          slideIndex,
+        });
+      }
+    });
     this.#slidesContainer.replaceChildren(...this.#slides);
     // Needed because a transition briefly makes both participating slides `position: absolute`
     // (see #beginTransitionFrame), at which point neither contributes to this container's
@@ -126,6 +149,7 @@ export class PptxPresentationElement extends HTMLElement {
     this.#slidesContainer.style.aspectRatio = `${presentation.slideSize.width} / ${presentation.slideSize.height}`;
     this.#currentIndex = 0;
     this.#updateActiveSlide();
+    return unsupportedFeatures;
   }
 
   /** Index of the currently visible slide. */

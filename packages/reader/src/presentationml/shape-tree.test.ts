@@ -84,6 +84,30 @@ describe('presentationml/shape-tree', () => {
     expect(nodes[0]).toMatchObject({ kind: 'picture', nonVisual: { name: 'Picture 1' } });
   });
 
+  it("parses a picture whose blip has no direct r:embed, only an extLst-nested extension blip (PowerPoint's SVG icons)", () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a" xmlns:r="r">
+        <p:pic>
+          <p:nvPicPr><p:cNvPr id="2" name="Icon 1"/></p:nvPicPr>
+          <p:blipFill>
+            <a:blip>
+              <a:extLst>
+                <a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}">
+                  <asvg:svgBlip xmlns:asvg="a" r:embed="rId1"/>
+                </a:ext>
+              </a:extLst>
+            </a:blip>
+          </p:blipFill>
+          <p:spPr/>
+        </p:pic>
+      </p:spTree>`,
+    );
+
+    const nodes = parseShapeTree(spTree!, withImage);
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({ kind: 'picture', nonVisual: { name: 'Icon 1' } });
+  });
+
   it('drops a group or graphicFrame missing a required transform', () => {
     const [spTree] = parseXml(
       `<p:spTree xmlns:p="p" xmlns:a="a">
@@ -94,7 +118,7 @@ describe('presentationml/shape-tree', () => {
     expect(parseShapeTree(spTree!, noMedia)).toEqual([]);
   });
 
-  it("parses a shape's p:style fillRef/lnRef (PowerPoint's Shape Styles gallery, no explicit spPr fill/line)", () => {
+  it("parses a shape's p:style fillRef/lnRef/fontRef (PowerPoint's Shape Styles gallery, no explicit spPr fill/line or run colour)", () => {
     const [spTree] = parseXml(
       `<p:spTree xmlns:p="p" xmlns:a="a">
         <p:sp>
@@ -117,8 +141,39 @@ describe('presentationml/shape-tree', () => {
           index: 2,
           color: { type: 'scheme', value: 'accent1', transforms: { shade: 15000 } },
         },
+        fontRef: { collection: 'minor', color: { type: 'scheme', value: 'lt1' } },
       },
     });
+  });
+
+  it('parses fontRef with idx="major"/"none", and omits an unrecognized idx value', () => {
+    const [spTree] = parseXml(
+      `<p:spTree xmlns:p="p" xmlns:a="a">
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="2" name="Shape 1"/></p:nvSpPr>
+          <p:spPr/>
+          <p:style><a:fontRef idx="major"><a:schemeClr val="dk1"/></a:fontRef></p:style>
+        </p:sp>
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="3" name="Shape 2"/></p:nvSpPr>
+          <p:spPr/>
+          <p:style><a:fontRef idx="none"><a:schemeClr val="dk1"/></a:fontRef></p:style>
+        </p:sp>
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="4" name="Shape 3"/></p:nvSpPr>
+          <p:spPr/>
+          <p:style><a:fontRef idx="bogus"><a:schemeClr val="dk1"/></a:fontRef></p:style>
+        </p:sp>
+      </p:spTree>`,
+    );
+    const [major, none, bogus] = parseShapeTree(spTree!, noMedia);
+    expect(major).toMatchObject({
+      style: { fontRef: { collection: 'major', color: { type: 'scheme', value: 'dk1' } } },
+    });
+    expect(none).toMatchObject({
+      style: { fontRef: { collection: 'none', color: { type: 'scheme', value: 'dk1' } } },
+    });
+    expect(bogus).not.toHaveProperty('style');
   });
 
   it('parses a picture/connector p:style, and omits style entirely when absent', () => {

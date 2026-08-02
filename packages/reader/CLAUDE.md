@@ -26,7 +26,16 @@ element). A theme's `fmtScheme` fill/line style matrices (`fillStyleLst`/`lnStyl
 parsed too (`theme.ts`, reusing `drawingml/fill.ts`'s/`line.ts`'s own parsers), along with a
 shape/picture/connector's `p:style` `fillRef`/`lnRef` (`presentationml/shape-tree.ts`'s
 `parseShapeStyle`) — together these resolve the fill/line PowerPoint's Shape Styles gallery
-writes by default (a bare style reference, no explicit `spPr` fill/line at all). A slide's
+writes by default (a bare style reference, no explicit `spPr` fill/line at all). A blip's
+`r:embed` can also live nested inside `<a:blip>/<a:extLst>` rather than directly on `<a:blip>`
+itself — PowerPoint's Icons gallery graphics are saved this way (`asvg:svgBlip`, an SVG-only
+blip with no `r:embed` on `<a:blip>` at all) — `drawingml/fill.ts`'s `blipEmbedId` (new) checks
+any extension child for its own `r:embed` as a fallback, used by both `parseFill`'s `blipFill`
+case and `presentationml/shape-tree.ts`'s `parsePicture`; without this, a real, common class of
+picture (any built-in PowerPoint icon) silently vanished from the shape tree entirely, with
+no error — `parsePicture` returning `undefined` for an unresolvable image looks identical to a
+missing/broken relationship, which is exactly what this was mistaken for until traced back to
+the actual slide XML. A slide's
 `p:timing` (§19.3.1.48 — element/build animation) is also parsed, by `presentationml/animation.ts`'s
 `parseSlideTiming`, into `Slide.timing`; see `packages/presentation/CLAUDE.md`'s own note on this
 for why (unlike everything else in this list) `to-html5` doesn't consume it yet. A slide's
@@ -65,9 +74,10 @@ consume this either, deliberately deferred alongside `timing`. `tsc -b`,
   `MediaResolver`, since a theme's style matrix referencing an image fill is
   vanishingly rare and not worth plumbing the theme part's own relationships through
   for. `presentationml/shape-tree.ts`'s `parseShapeStyle` parses a shape/picture/
-  connector's own `p:style` `fillRef`/`lnRef` (§19.3.1.44) the same way it resolves any
-  other child colour — `effectRef`/`fontRef` are skipped, unparsed, matching
-  `ShapeStyle`'s own scope in `packages/presentation`.
+  connector's own `p:style` `fillRef`/`lnRef`/`fontRef` (§19.3.1.44) the same way it resolves any
+  other child colour, except `fontRef`'s own `idx` (§20.1.4.1.17 — `"major"`/`"minor"`/`"none"`,
+  not a numeric style-matrix index the way `fillRef`/`lnRef`'s is) — `effectRef` is skipped,
+  unparsed, matching `ShapeStyle`'s own scope in `packages/presentation`.
 - `reader-context.ts` — `ReaderContext`, threaded through every parser: the
   `OpcPackage` plus part-name-keyed caches (`themes`, `slideMasters`,
   `slideLayouts`, `notesMasters`, `slides`, `media`) so a part referenced from
@@ -93,7 +103,7 @@ two-phase order intact.
 
 Anywhere `packages/presentation` says "unmodeled" (custGeom path data, chart/smartArt/
 oleObject internals, table style matrices, `effectStyleLst`/`bgFillStyleLst`, `p:style`'s
-`effectRef`/`fontRef`, theme overrides, custom shows, path gradients), the reader simply
+`effectRef`, theme overrides, custom shows, path gradients), the reader simply
 never reads that XML — it doesn't parse-then-discard. Don't add handling for these
 without first updating the corresponding type in `packages/presentation`.
 

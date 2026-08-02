@@ -116,11 +116,14 @@ transition.ts`: a `Slide`'s optional `transition` (§19.3.1.49, `p:transition`) 
    Still remaining: table cell fill/styles, the ~170 presets outside that subset, `custGeom`
    (freeform path data, unmodeled in `packages/presentation`), gradient/pattern/blip fill on the
    nine SVG-path presets (solid-only today), clipping a _picture_ to one of those nine (only
-   `roundRect`/`ellipse` picture crops work so far), and `p:style`'s `effectRef`/`fontRef` (effect
-   styling and a fontRef text-colour fallback, both unmodeled). The DOM structure (`.pptx-shape`,
-   `.pptx-paragraph`, `.pptx-run`, etc.) already exists so most of this should be additive CSS/SVG,
-   not a restructure. See `packages/to-html5/CLAUDE.md`'s scope boundary for the full list and what's
-   deliberately not modeled yet.
+   `roundRect`/`ellipse` picture crops work so far), and `p:style`'s `effectRef` (effect styling,
+   unmodeled — needs effect rendering to exist at all first). A shape's `p:style/fontRef` (its
+   default run colour/typeface fallback when nothing else in the chain sets one) and a text body's
+   effective vertical anchor (`a:bodyPr/@anchor`, rendered via flexbox) are both done now too — see
+   `packages/to-html5/CLAUDE.md`'s two newest "Key design decision" sections. The DOM structure
+   (`.pptx-shape`, `.pptx-paragraph`, `.pptx-run`, etc.) already exists so most of what's left
+   should be additive CSS/SVG, not a restructure. See `packages/to-html5/CLAUDE.md`'s scope
+   boundary for the full list and what's deliberately not modeled yet.
 2. **Known `to-html5` limitations**, in rough order of how often they'll bite: placeholder
    matching doesn't model the spec's type-equivalence groups (e.g. slide `ctrTitle` matching
    layout `title`); rotation doesn't compose across nested groups; connectors still render as an
@@ -215,8 +218,19 @@ transition.ts`: a `Slide`'s optional `transition` (§19.3.1.49, `p:transition`) 
    `#awaitTransition`/`#finalizeTransition` (replacing `#scheduleFinalize`) now driving playback via
    `Element.animate()` instead of a plain CSS `transition` + `setTimeout`, and
    `presentation-element.test.ts`'s new `FakeAnimation`/`HTMLElement.prototype.animate` mock (since
-   `happy-dom` implements no Web Animations API at all) — are all working-tree changes on top of the
-   `to-html5` commit; nothing since has been committed.
+   `happy-dom` implements no Web Animations API at all) — plus this session's fix for two shape-text
+   rendering gaps found via `apps/web-demo/src/Presentation1.pptx`'s slide 1 circle: `FontReference`/
+   `FontCollectionIndex` (new, `presentationml/shape-style.ts`) and `ShapeStyle.fontRef`, parsed by
+   `reader`'s `parseShapeStyle`; `presentation`'s `resolveEffectiveRunProperties` taking an optional
+   `ShapeStyle` and folding `fontRef` into `levelChain` above the master/placeholder chain but below
+   the shape's own list style (initially shipped as the _lowest_-priority source instead, then
+   corrected the same session once real content showed the master's `otherStyle` category clobbering
+   a shape's own `fontRef` colour — see `packages/to-html5/CLAUDE.md`'s design decision), and
+   its new `resolveEffectiveAnchor` (own value, else layout/master placeholder inheritance, else
+   `'t'`) for `a:bodyPr/@anchor`; and `to-html5`'s `renderShape` now applying both — a flexbox
+   `justify-content` for vertical anchoring, and threading `shape.style` through to
+   `renderTextBody`/`renderRun`/`renderBulletSpan` for the `fontRef` fallback — are all working-tree
+   changes on top of the `to-html5` commit; nothing since has been committed.
 
 ## Future feature: scroll-driven playback
 

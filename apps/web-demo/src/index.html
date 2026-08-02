@@ -3,6 +3,35 @@
   <head>
     <meta charset="utf-8" />
     <title>pptx2html web demo</title>
+    <style>
+      .unsupported-features {
+        border: 1px solid #d9822b;
+        background: #fff8ef;
+        border-radius: 4px;
+        padding: 0.5rem 1rem;
+        margin: 1rem 0;
+        max-width: 640px;
+      }
+      .unsupported-features h2 {
+        margin: 0.5rem 0;
+        font-size: 1rem;
+      }
+      .unsupported-features details {
+        margin-bottom: 0.5rem;
+      }
+      .unsupported-features summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .unsupported-features ul {
+        margin: 0.25rem 0 0.5rem 1.25rem;
+        padding: 0;
+      }
+      .unsupported-features li {
+        font-size: 0.9rem;
+        margin-bottom: 0.25rem;
+      }
+    </style>
   </head>
   <body>
     <div id="app">
@@ -10,6 +39,7 @@
       <p>Pick a .pptx file — the parsed object tree is logged to the console.</p>
       <input id="file-input" type="file" accept=".pptx" />
       <p id="status"></p>
+      <div id="unsupported-features" class="unsupported-features" hidden></div>
       <div id="output"></div>
     </div>
   </body>

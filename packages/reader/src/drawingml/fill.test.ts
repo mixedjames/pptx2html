@@ -85,6 +85,31 @@ describe('drawingml/fill', () => {
     });
   });
 
+  it("resolves blipFill media from an extLst-nested extension blip (e.g. PowerPoint's SVG icons) when a:blip itself has no r:embed", () => {
+    const node = firstNode(
+      `<a:spPr xmlns:a="a" xmlns:r="r">
+        <a:blipFill>
+          <a:blip>
+            <a:extLst>
+              <a:ext uri="{96DAC541-7B7A-43D3-8B79-37D633B846F1}">
+                <asvg:svgBlip xmlns:asvg="a" r:embed="rId2"/>
+              </a:ext>
+            </a:extLst>
+          </a:blip>
+          <a:stretch/>
+        </a:blipFill>
+      </a:spPr>`,
+    );
+    const resolveMedia: MediaResolver = (id) =>
+      id === 'rId2' ? { contentType: 'image/svg+xml', data: new Uint8Array([1, 2, 3]) } : undefined;
+
+    expect(parseChildFill(node, resolveMedia)).toEqual({
+      type: 'blip',
+      image: { contentType: 'image/svg+xml', data: new Uint8Array([1, 2, 3]) },
+      stretch: true,
+    });
+  });
+
   it('omits blipFill entirely when the relationship cannot be resolved', () => {
     const node = firstNode(
       '<a:spPr xmlns:a="a" xmlns:r="r"><a:blipFill><a:blip r:embed="rIdX"/></a:blipFill></a:spPr>',

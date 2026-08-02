@@ -6,12 +6,18 @@ import type {
   PlaceholderType,
   RunProperties,
   TextAlignment,
+  TextAnchor,
   TextBody,
   TextListStyle,
   TextListStyleLevel,
   TextRunElement,
 } from '../drawingml/index.js';
-import type { SlideLayout } from '../presentationml/index.js';
+import type {
+  FontReference,
+  ShapeStyle,
+  ShapeTreeNode,
+  SlideLayout,
+} from '../presentationml/index.js';
 import type { FontScheme } from '../theme.js';
 import { findPlaceholderMatch } from './placeholder.js';
 
@@ -45,6 +51,27 @@ function masterStyleCategory(
 }
 
 /**
+ * A shape's `p:style/fontRef` (§20.1.4.1.17) as a `TextListStyleLevel`-shaped `RunProperties`
+ * source (see `levelChain`'s rung 5, below): its colour becomes a `SolidFill`, and its font
+ * collection becomes the same `+mj-lt`/`+mn-lt` theme token `resolveTypeface` already knows how to
+ * resolve (so no new font-resolution mechanism is needed here) — `'none'` contributes no typeface
+ * fallback at all.
+ */
+function fontReferenceRunProperties(fontRef: FontReference | undefined): RunProperties | undefined {
+  if (!fontRef) return undefined;
+  const typeface =
+    fontRef.collection === 'major'
+      ? '+mj-lt'
+      : fontRef.collection === 'minor'
+        ? '+mn-lt'
+        : undefined;
+  return {
+    fill: { type: 'solid', color: fontRef.color },
+    ...(typeface ? { typeface } : {}),
+  };
+}
+
+/**
  * Collects this paragraph's outline level from every rung of the list-style inheritance chain
  * (§21.1.2, simplified — the spec's exact algorithm is under-specified at the edges; this follows
  * the order real-world renderers converge on), lowest to highest priority:
@@ -54,18 +81,27 @@ function masterStyleCategory(
  * 3. The master's own matching placeholder shape's list style, if any (mirrors
  *    `resolveInheritedTransform`'s layout->master walk, one level further out).
  * 4. The layout's own matching placeholder shape's list style, if any.
- * 5. This shape's own list style (`TextBody.listStyle`).
+ * 5. This shape's own `p:style/fontRef` (§20.1.4.1.17), if any — see `fontReferenceRunProperties`.
+ *    Placed *above* the master/placeholder chain (1-4): PowerPoint's Shape Styles gallery writes a
+ *    `fontRef` as the shape's own directly-authored quick-style choice, which is more specific than
+ *    — and visibly must outrank — the master's generic template default (`otherStyle` in
+ *    particular almost always sets an explicit dark colour at level 0, which would otherwise always
+ *    clobber a lighter `fontRef` colour chosen to contrast with the shape's own fill).
+ * 6. This shape's own list style (`TextBody.listStyle`) — still outranks `fontRef`, since anything
+ *    the author explicitly formatted on the shape's own text should win over a gallery default.
  *
  * Shared by `resolveEffectiveRunProperties` (character formatting) and
  * `resolveEffectiveAlignment` (paragraph alignment) — both need this same chain, just merged
  * differently (a field-by-field merge for run properties vs. "first defined wins" for the single
- * `alignment` scalar).
+ * `alignment` scalar). Only `resolveEffectiveRunProperties` passes `shapeStyle` — `fontRef` has
+ * nothing to say about alignment/bullet/indent, so the other resolvers simply never populate rung 5.
  */
 function levelChain(
   paragraph: Paragraph,
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
   context: TextStyleContext,
+  shapeStyle?: ShapeStyle,
 ): readonly (TextListStyleLevel | undefined)[] {
   const level = paragraph.properties?.level ?? 0;
   const layout = context.layout;
@@ -98,11 +134,16 @@ function levelChain(
     level,
   );
 
+  const fontReferenceLevel: TextListStyleLevel | undefined = shapeStyle?.fontRef
+    ? { runProperties: fontReferenceRunProperties(shapeStyle.fontRef) }
+    : undefined;
+
   return [
     levelOf(context.defaultTextStyle, level),
     masterCategoryLevel,
     masterPlaceholderLevel,
     layoutPlaceholderLevel,
+    fontReferenceLevel,
     levelOf(shapeTextBody.listStyle, level),
   ];
 }
@@ -120,13 +161,14 @@ function mergeRunProperties(...sources: readonly (RunProperties | undefined)[]):
 }
 
 /**
- * Resolves a run's effective character formatting by walking `levelChain`, then layering this
- * paragraph's own default run properties (`pPr`'s defRPr) and finally the run's own properties
- * (`rPr`) on top. Each step only supplies the per-field defaults for the paragraph's own outline
- * level (`paragraph.properties.level`, 0-based) — a level a source doesn't define contributes
- * nothing. Theme font-scheme resolution (`+mj-lt` etc.) is deliberately not done here — see
- * `resolveTypeface`, since it only concerns the `typeface` field and needs the theme, not a list
- * style.
+ * Resolves a run's effective character formatting by walking `levelChain` (which now includes
+ * `shapeStyle`'s `fontRef`, if any, as its own rung — see that function's doc comment for exactly
+ * where it sits), then layering this paragraph's own default run properties (`pPr`'s defRPr) and
+ * finally the run's own properties (`rPr`) on top. Each step only supplies the per-field defaults
+ * for the paragraph's own outline level (`paragraph.properties.level`, 0-based) — a level a source
+ * doesn't define contributes nothing. Theme font-scheme resolution (`+mj-lt` etc.) is deliberately
+ * not done here — see `resolveTypeface`, since it only concerns the `typeface` field and needs the
+ * theme, not a list style.
  */
 export function resolveEffectiveRunProperties(
   run: TextRunElement,
@@ -134,8 +176,9 @@ export function resolveEffectiveRunProperties(
   shapeTextBody: TextBody,
   placeholder: Placeholder | undefined,
   context: TextStyleContext,
+  shapeStyle?: ShapeStyle,
 ): RunProperties {
-  const chain = levelChain(paragraph, shapeTextBody, placeholder, context);
+  const chain = levelChain(paragraph, shapeTextBody, placeholder, context, shapeStyle);
   return mergeRunProperties(
     ...chain.map((entry) => entry?.runProperties),
     paragraph.properties?.defaultRunProperties,
@@ -212,6 +255,41 @@ export function resolveEffectiveIndent(
     marginLeft: resolveScalar(paragraph.properties?.marginLeft, chain, (level) => level.marginLeft),
     indent: resolveScalar(paragraph.properties?.indent, chain, (level) => level.indent),
   };
+}
+
+function ownTextBody(node: ShapeTreeNode): TextBody | undefined {
+  return node.kind === 'shape' ? node.textBody : undefined;
+}
+
+/**
+ * Resolves a text body's effective vertical anchor (§21.1.2.1.1, a:bodyPr/@anchor): its own value
+ * if set, otherwise the matching placeholder shape's own value in the layout, then the master —
+ * the same placeholder-inheritance chain `resolveInheritedTransform` walks (§19.3.1.36), just for
+ * `bodyPr` instead of `xfrm`. Defaults to `'t'` (top), the schema's own default, when nothing in
+ * the chain sets one. `'just'` (anchor-justified, distributing multiple paragraphs to fill the
+ * box) has no direct flexbox equivalent for a renderer built around a single block of paragraphs
+ * and is left to whatever a consumer's own top-anchored fallback does — see `to-html5`'s own
+ * mapping.
+ */
+export function resolveEffectiveAnchor(
+  shapeTextBody: TextBody,
+  placeholder: Placeholder | undefined,
+  context: TextStyleContext,
+): TextAnchor {
+  if (shapeTextBody.properties?.anchor) return shapeTextBody.properties.anchor;
+
+  const layout = context.layout;
+  if (placeholder && layout) {
+    const layoutMatch = findPlaceholderMatch(placeholder, layout.commonSlideData.shapeTree);
+    const layoutAnchor = layoutMatch && ownTextBody(layoutMatch)?.properties?.anchor;
+    if (layoutAnchor) return layoutAnchor;
+
+    const masterMatch = findPlaceholderMatch(placeholder, layout.master.commonSlideData.shapeTree);
+    const masterAnchor = masterMatch && ownTextBody(masterMatch)?.properties?.anchor;
+    if (masterAnchor) return masterAnchor;
+  }
+
+  return 't';
 }
 
 const THEME_FONT_TOKENS: Record<

@@ -4,6 +4,7 @@ import type {
   Paragraph,
   Placeholder,
   RunProperties,
+  ShapeStyle,
   TextAlignment,
   TextBody,
   TextRunElement,
@@ -151,13 +152,21 @@ function renderRun(
   textBody: TextBody,
   placeholder: Placeholder | undefined,
   context: RenderContext,
+  shapeStyle: ShapeStyle | undefined,
 ): Node {
   if (run.kind === 'break') return doc.createElement('br');
 
   const el = doc.createElement('span');
   el.className = 'pptx-run';
   el.textContent = textOf(run);
-  const properties = resolveEffectiveRunProperties(run, paragraph, textBody, placeholder, context);
+  const properties = resolveEffectiveRunProperties(
+    run,
+    paragraph,
+    textBody,
+    placeholder,
+    context,
+    shapeStyle,
+  );
   applyRunStyle(el, properties, context);
   return el;
 }
@@ -168,6 +177,7 @@ function renderParagraph(
   textBody: TextBody,
   placeholder: Placeholder | undefined,
   context: RenderContext,
+  shapeStyle: ShapeStyle | undefined,
   bullet: Bullet | undefined,
   autoNumberLabel: string | undefined,
 ): HTMLElement {
@@ -188,6 +198,7 @@ function renderParagraph(
       textBody,
       placeholder,
       context,
+      shapeStyle,
     );
     p.appendChild(renderBulletSpan(doc, bullet, label, ambientRunProperties, context));
     p.appendChild(doc.createTextNode(' '));
@@ -198,7 +209,7 @@ function renderParagraph(
     p.appendChild(doc.createElement('br'));
   } else {
     for (const run of paragraph.runs) {
-      p.appendChild(renderRun(doc, run, paragraph, textBody, placeholder, context));
+      p.appendChild(renderRun(doc, run, paragraph, textBody, placeholder, context, shapeStyle));
     }
   }
   return p;
@@ -209,6 +220,7 @@ export function renderTextBody(
   textBody: TextBody,
   placeholder: Placeholder | undefined,
   context: RenderContext,
+  shapeStyle?: ShapeStyle,
 ): HTMLElement {
   const container = doc.createElement('div');
   container.className = 'pptx-text-body';
@@ -232,7 +244,16 @@ export function renderTextBody(
     }
 
     container.appendChild(
-      renderParagraph(doc, paragraph, textBody, placeholder, context, bullet, autoNumberLabel),
+      renderParagraph(
+        doc,
+        paragraph,
+        textBody,
+        placeholder,
+        context,
+        shapeStyle,
+        bullet,
+        autoNumberLabel,
+      ),
     );
   }
 

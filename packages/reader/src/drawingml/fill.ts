@@ -8,6 +8,29 @@ import { parseAngle, parsePercentage } from './units.js';
 /** Resolves an `r:embed`/`r:link` relationship id (scoped to the current part) to its media. */
 export type MediaResolver = (relationshipId: string) => MediaPart | undefined;
 
+/**
+ * A blip's `r:embed` normally lives directly on `<a:blip>` (§20.1.8.14) — but PowerPoint's Icons
+ * gallery graphics (and other blip variants) instead nest it inside `<a:blip>/<a:extLst>`, e.g.
+ * `asvg:svgBlip` (the SVG-icon extension, `{96DAC541-7B7A-43D3-8B79-37D633B846F1}`) carries its
+ * own `r:embed` pointing at the real image part, leaving `<a:blip>` itself with no `r:embed` at
+ * all. Falls back to any extension child with its own `r:embed` rather than hardcoding that one
+ * extension's URI/namespace, so any similarly-shaped extension blip resolves the same way.
+ */
+export function blipEmbedId(blip: XmlNode): string | undefined {
+  const direct = attr(blip, 'r:embed');
+  if (direct) return direct;
+
+  const extLst = findChild(blip, 'extLst');
+  if (!extLst) return undefined;
+  for (const ext of children(extLst)) {
+    for (const child of children(ext)) {
+      const embed = attr(child, 'r:embed');
+      if (embed) return embed;
+    }
+  }
+  return undefined;
+}
+
 const FILL_NAMES: ReadonlySet<string> = new Set([
   'noFill',
   'solidFill',
@@ -62,7 +85,7 @@ export function parseFill(node: XmlNode, resolveMedia: MediaResolver): Fill | un
 
     case 'blipFill': {
       const blip = findChild(node, 'blip');
-      const embed = blip && attr(blip, 'r:embed');
+      const embed = blip ? blipEmbedId(blip) : undefined;
       const image = embed ? resolveMedia(embed) : undefined;
       if (!image) return undefined;
 

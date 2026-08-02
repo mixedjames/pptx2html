@@ -1,5 +1,7 @@
 import type {
   ConnectionShape,
+  FontCollectionIndex,
+  FontReference,
   GraphicFrame,
   GraphicPlaceholder,
   GroupShape,
@@ -12,7 +14,7 @@ import type {
 } from '@pptx2html/presentation';
 
 import { parseChildColor } from '../drawingml/color.js';
-import { type MediaResolver } from '../drawingml/fill.js';
+import { blipEmbedId, type MediaResolver } from '../drawingml/fill.js';
 import { parseTransform } from '../drawingml/geometry.js';
 import {
   parseNonVisualDrawingProperties,
@@ -39,14 +41,29 @@ function parseStyleMatrixReference(node: XmlNode | undefined): StyleMatrixRefere
   return { index, color };
 }
 
-/** Parses p:style's fillRef/lnRef (§19.3.1.44) — effectRef/fontRef are unmodeled, see
+const FONT_COLLECTION_INDICES: ReadonlySet<string> = new Set(['major', 'minor', 'none']);
+
+function parseFontReference(node: XmlNode | undefined): FontReference | undefined {
+  if (!node) return undefined;
+  const idx = attr(node, 'idx');
+  const color = parseChildColor(node);
+  if (!idx || !FONT_COLLECTION_INDICES.has(idx) || !color) return undefined;
+  return { collection: idx as FontCollectionIndex, color };
+}
+
+/** Parses p:style's fillRef/lnRef/fontRef (§19.3.1.44) — effectRef is unmodeled, see
  * `ShapeStyle`'s own doc comment. */
 function parseShapeStyle(node: XmlNode | undefined): ShapeStyle | undefined {
   if (!node) return undefined;
   const fillRef = parseStyleMatrixReference(findChild(node, 'fillRef'));
   const lineRef = parseStyleMatrixReference(findChild(node, 'lnRef'));
-  if (!fillRef && !lineRef) return undefined;
-  return { ...(fillRef ? { fillRef } : {}), ...(lineRef ? { lineRef } : {}) };
+  const fontRef = parseFontReference(findChild(node, 'fontRef'));
+  if (!fillRef && !lineRef && !fontRef) return undefined;
+  return {
+    ...(fillRef ? { fillRef } : {}),
+    ...(lineRef ? { lineRef } : {}),
+    ...(fontRef ? { fontRef } : {}),
+  };
 }
 
 function parseShape(node: XmlNode, resolveMedia: MediaResolver): Shape {
@@ -64,7 +81,7 @@ function parseShape(node: XmlNode, resolveMedia: MediaResolver): Shape {
 function parsePicture(node: XmlNode, resolveMedia: MediaResolver): Picture | undefined {
   const blipFill = findChild(node, 'blipFill');
   const blip = blipFill ? findChild(blipFill, 'blip') : undefined;
-  const embed = blip ? attr(blip, 'r:embed') : undefined;
+  const embed = blip ? blipEmbedId(blip) : undefined;
   const image = embed ? resolveMedia(embed) : undefined;
   if (!image) return undefined;
 
