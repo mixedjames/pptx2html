@@ -2,6 +2,8 @@ import { readPresentation } from '@pptx2html/reader';
 import type { UnsupportedFeature, UnsupportedFeatureCollector } from '@pptx2html/to-html5';
 import { renderPresentation } from '@pptx2html/to-html5';
 
+//
+
 type ViewName = 'chooser' | 'presentation' | 'log';
 
 const chooserView = document.getElementById('view-chooser');
