@@ -1,10 +1,12 @@
+import type { Presentation } from '@pptx2html/presentation';
 import { readPresentation } from '@pptx2html/reader';
 import type { UnsupportedFeature, UnsupportedFeatureCollector } from '@pptx2html/to-html5';
-import { renderPresentation } from '@pptx2html/to-html5';
+import { renderPresentation, renderScrollPresentation } from '@pptx2html/to-html5';
 
 //
 
 type ViewName = 'chooser' | 'presentation' | 'log';
+type Mode = 'click' | 'scroll';
 
 const chooserView = document.getElementById('view-chooser');
 const presentationView = document.getElementById('view-presentation');
@@ -18,10 +20,14 @@ const errorLogContent = document.getElementById('error-log-content');
 const backToChooser = document.getElementById('back-to-chooser');
 const openErrorLog = document.getElementById('open-error-log');
 const backToPresentation = document.getElementById('back-to-presentation');
+const modeToggle = document.getElementById('mode-toggle');
+const fullscreenButton = document.getElementById('fullscreen-btn');
 
 /** Set once a presentation has been chosen — guards direct/back navigation into the other views. */
 let currentFilename: string | undefined;
+let currentPresentation: Presentation | undefined;
 let currentUnsupportedFeatures: UnsupportedFeatureCollector | undefined;
+let currentMode: Mode = 'click';
 
 /** "sliding-panels.pptx" -> "Sliding Panels" — filenames are the only source of a display name. */
 function titleFromFilename(filename: string): string {
@@ -148,9 +154,27 @@ function renderErrorLogContent(): void {
   }
 }
 
+/** (Re-)renders `currentPresentation` in whichever mode is currently selected — the one place
+ *  either a freshly-loaded demo or a mode toggle ends up, so switching modes never needs a
+ *  re-fetch/re-parse. */
+function renderCurrent(): void {
+  if (!currentPresentation) return;
+  const { element, unsupportedFeatures } =
+    currentMode === 'scroll'
+      ? renderScrollPresentation(currentPresentation)
+      : renderPresentation(currentPresentation);
+  currentUnsupportedFeatures = unsupportedFeatures;
+  updateErrorBadge();
+  renderErrorLogContent();
+  output?.replaceChildren(element);
+  const navigateHint = currentMode === 'scroll' ? 'Scroll to navigate.' : 'Tap or use arrow keys.';
+  setStatus(`${currentPresentation.slides.length} slide(s). ${navigateHint}`);
+}
+
 async function loadDemo(filename: string): Promise<void> {
   setStatus(`Loading ${filename}…`);
   output?.replaceChildren();
+  currentPresentation = undefined;
   currentUnsupportedFeatures = undefined;
   updateErrorBadge();
 
@@ -158,15 +182,8 @@ async function loadDemo(filename: string): Promise<void> {
     const response = await fetch(`demos/${encodeURIComponent(filename)}`);
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const buffer = await response.arrayBuffer();
-    const presentation = readPresentation(new Uint8Array(buffer));
-    const { element, unsupportedFeatures } = renderPresentation(presentation);
-    currentUnsupportedFeatures = unsupportedFeatures;
-    updateErrorBadge();
-    renderErrorLogContent();
-    output?.replaceChildren(element);
-    setStatus(
-      `${presentation.slides.length} slide(s). Tap the presentation or use arrow keys to navigate.`,
-    );
+    currentPresentation = readPresentation(new Uint8Array(buffer));
+    renderCurrent();
   } catch (error) {
     console.error(error);
     setStatus(`Failed to load ${filename}: ${String(error)}`);
@@ -186,3 +203,30 @@ openErrorLog?.addEventListener('click', () => navigate('log'));
 backToPresentation?.addEventListener('click', () => navigate('presentation'));
 window.addEventListener('hashchange', syncViewFromHash);
 syncViewFromHash();
+
+modeToggle?.addEventListener('click', () => {
+  currentMode = currentMode === 'click' ? 'scroll' : 'click';
+  modeToggle.textContent = currentMode === 'click' ? 'Click' : 'Scroll';
+  renderCurrent();
+});
+
+// Fullscreens the whole presentation view (header included), not just #output — its own controls
+// (back/mode/fullscreen/error-log) stay reachable while fullscreen instead of disappearing along
+// with the rest of the page, which is what fullscreening #output alone would do (the Fullscreen
+// API hides everything outside the fullscreened element).
+if (fullscreenButton && presentationView) {
+  fullscreenButton.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void presentationView.requestFullscreen();
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    const isFullscreen = document.fullscreenElement === presentationView;
+    fullscreenButton.setAttribute(
+      'aria-label',
+      isFullscreen ? 'Exit fullscreen' : 'Toggle fullscreen',
+    );
+  });
+}

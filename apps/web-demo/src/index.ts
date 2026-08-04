@@ -9,6 +9,8 @@ const fileInput = document.getElementById('file-input');
 const status = document.getElementById('status');
 const output = document.getElementById('output');
 const unsupportedPanel = document.getElementById('unsupported-features');
+const stage = document.getElementById('stage');
+const fullscreenButton = document.getElementById('fullscreen-btn');
 const modeInputs = [
   ...document.querySelectorAll<HTMLInputElement>('#mode-fieldset input[name="mode"]'),
 ];
@@ -39,8 +41,19 @@ function renderUnsupportedFeaturesPanel(collector: UnsupportedFeatureCollector):
   }
   unsupportedPanel.hidden = false;
 
-  const heading = document.createElement('h2');
-  heading.textContent = `Unsupported features (${collector.all.length})`;
+  const heading = document.createElement('div');
+  heading.className = 'heading';
+  const headingText = document.createElement('h2');
+  headingText.textContent = `Unsupported features (${collector.all.length})`;
+  const closeButton = document.createElement('button');
+  closeButton.type = 'button';
+  closeButton.className = 'close-button';
+  closeButton.setAttribute('aria-label', 'Hide unsupported features panel');
+  closeButton.textContent = '×';
+  closeButton.addEventListener('click', () => {
+    unsupportedPanel.hidden = true;
+  });
+  heading.append(headingText, closeButton);
   unsupportedPanel.appendChild(heading);
 
   const presentationLevel = collector.all.filter((feature) => feature.slideIndex === undefined);
@@ -70,14 +83,12 @@ function currentMode(): Mode {
 
 /** (Re-)renders `currentPresentation` in whichever mode is currently selected — the one place
  *  either a freshly-parsed file or a mode toggle ends up, so switching modes never needs a
- *  re-parse. `renderScrollPresentation`'s `<pptx-scroll-presentation>` needs an explicit box (see
- *  its own doc comment) — `#output`'s `scroll-mode` class (index.html) supplies that; `scroll-mode`
- *  is toggled here rather than left permanently on, since it also fixes `#output`'s height even
- *  when a click-driven render doesn't need one. */
+ *  re-parse. `#output` always fills `#stage` (index.html) regardless of mode, which is what
+ *  `renderScrollPresentation`'s `<pptx-scroll-presentation>` needs (an explicit box — see its own
+ *  doc comment) and is harmless for `renderPresentation`'s own aspect-ratio-locked sizing. */
 function renderCurrent(): void {
   if (!currentPresentation) return;
   const mode = currentMode();
-  output?.classList.toggle('scroll-mode', mode === 'scroll');
 
   const { element, unsupportedFeatures } =
     mode === 'scroll'
@@ -122,4 +133,22 @@ if (fileInput instanceof HTMLInputElement) {
 
 for (const input of modeInputs) {
   input.addEventListener('change', renderCurrent);
+}
+
+// Fullscreens #stage (the presentation plus its own chrome overlay), not just #output — the
+// overlay's own controls (including this button) stay reachable while fullscreen instead of
+// disappearing along with the rest of the page, which is what fullscreening #output alone would
+// do (the Fullscreen API hides everything outside the fullscreened element).
+if (fullscreenButton && stage) {
+  fullscreenButton.addEventListener('click', () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void stage.requestFullscreen();
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    const isFullscreen = document.fullscreenElement === stage;
+    fullscreenButton.textContent = isFullscreen ? 'Exit fullscreen' : 'Fullscreen';
+  });
 }

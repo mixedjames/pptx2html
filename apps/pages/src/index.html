@@ -94,10 +94,8 @@
 
       .view-body {
         flex: 1;
-        padding: 0.75rem calc(0.75rem + env(safe-area-inset-right)) calc(
-            0.75rem + env(safe-area-inset-bottom)
-          )
-          calc(0.75rem + env(safe-area-inset-left));
+        padding: 0.75rem calc(0.75rem + env(safe-area-inset-right))
+          calc(0.75rem + env(safe-area-inset-bottom)) calc(0.75rem + env(safe-area-inset-left));
         overflow-y: auto;
       }
 
@@ -144,15 +142,67 @@
         color: #777;
       }
 
+      /* The presentation view fills the whole screen edge-to-edge — its header floats as a
+         translucent overlay (not in document flow, unlike the other two views' headers) so it
+         doesn't shrink the presentation's own screen space. */
+      #view-presentation {
+        position: relative;
+      }
+      #view-presentation .view-header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 2;
+        background: rgba(255, 255, 255, 0.85);
+        backdrop-filter: blur(6px);
+      }
+      #view-presentation .view-body {
+        padding: 0;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .header-titles {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.1rem;
+      }
+      .header-titles h1 {
+        flex: none;
+        margin: 0;
+        font-size: 1.1rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
       #status {
-        margin: 0 0 0.5rem;
+        margin: 0;
         color: #555;
+        font-size: 0.8rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .text-button {
+        min-width: auto;
+        padding: 0 0.75rem;
         font-size: 0.9rem;
+        font-weight: 600;
       }
 
       .presentation-container {
-        max-width: 960px;
-        margin: 0 auto;
+        position: absolute;
+        inset: 0;
+      }
+      .presentation-container > * {
+        width: 100%;
+        height: 100%;
       }
 
       .error-log h2 {
@@ -194,13 +244,24 @@
       <section id="view-presentation" class="view" hidden>
         <header class="view-header">
           <button id="back-to-chooser" class="icon-button" aria-label="Back to list">←</button>
-          <h1 id="presentation-title"></h1>
+          <div class="header-titles">
+            <h1 id="presentation-title"></h1>
+            <p id="status"></p>
+          </div>
+          <button id="mode-toggle" class="icon-button text-button" type="button">Click</button>
+          <button
+            id="fullscreen-btn"
+            class="icon-button"
+            aria-label="Toggle fullscreen"
+            type="button"
+          >
+            ⛶
+          </button>
           <button id="open-error-log" class="icon-button" aria-label="View error log">
             ⚠<span id="error-log-badge" class="badge" hidden>0</span>
           </button>
         </header>
         <div class="view-body">
-          <p id="status"></p>
           <div id="output" class="presentation-container"></div>
         </div>
       </section>
