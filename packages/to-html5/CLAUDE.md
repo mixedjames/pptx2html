@@ -33,7 +33,11 @@ decision: style-matrix (`p:style`) resolution" below). A shape/picture's own pre
 (`shape-geometry.ts`) — `rect`/`roundRect`/`ellipse` via CSS `border-radius` (keeping full
 fill/line fidelity, including gradients/patterns/images), and nine further presets (triangle,
 right triangle, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon, 5-point star) via a
-real SVG `<path>` outline (solid fill/stroke only — see the scope boundary). A slide's own
+real SVG `<path>` outline (solid fill/stroke only — see the scope boundary). A shape's freeform
+`custGeom` outline (§20.1.9.8, new — a later session) renders the same way, via
+`shape-geometry.ts`'s `customGeometryPath` — including a boolean Merge Shapes result (multiple
+`a:path` subpaths in one outline, rendering a cutout under SVG's default nonzero fill rule), the
+concrete case that motivated adding it (`apps/web-demo/src/Presentation1.pptx`'s slide 3). A slide's own
 background renders too, falling back through layout then master (`@pptx2html/presentation`'s
 `resolve/background.ts`), reusing the
 same `fill.ts` machinery. Every absolute magnitude this pass introduces — font size, border width,
@@ -43,12 +47,21 @@ position/size already scale via percentages. Table cell/table styling is still u
 deliberately deferred to a later pass. `<pptx-presentation>` now renders as an actual
 slideshow rather than every slide stacked one below the next — one slide visible at a time,
 advanced by click/keyboard (see "Key design decision: slideshow navigation" below). Navigating
-between slides now (new) plays `Slide.transition`'s own effect when it's `push` or `fade` (§19.3.1.49,
-`p:transition` — see "Key design decision: push/fade slide transitions" below) — a real animation,
-driven by the Web Animations API rather than a plain CSS `transition` (see that same design
-decision for why), rather than the instant swap every other effect kind (and a slide with no
-`transition` at all) still falls back to. `Slide.timing`'s per-element/per-build animation tree
-remains entirely unconsumed here still — see root `CLAUDE.md`'s Todos.
+between slides now (new) plays `Slide.transition`'s own effect when it's `push`, `fade`, or (new)
+`morph` (§19.3.1.49, `p:transition` — see "Key design decision: push/fade slide transitions" and
+"Key design decision: Morph transitions" below) — a real animation, driven by the Web Animations
+API rather than a plain CSS `transition` (see those same design decisions for why), rather than the
+instant swap every other effect kind (and a slide with no `transition` at all) still falls back to.
+Morph is the first of these to genuinely need a shape-level correspondence between two slides,
+supplied by `@pptx2html/presentation`'s `resolveMorphMatch` and reduced to plain, freestanding-
+HTML-safe data before this package ever stores it — see that design decision for the full
+mechanism and why that reduction is a hard requirement, not a preference. `Slide.timing`'s
+per-element/per-build animation tree
+(new) is now partially consumed — a `p:animEffect` whose `filter` is `"fade"` targeting a whole
+shape plays automatically, via the Web Animations API, as soon as its slide becomes active (see
+"Key design decision: `Slide.timing` fade animations" below) — every other behavior kind, every
+other `animEffect` filter, and implicit paragraph/graphic builds are still unconsumed and reported
+as unsupported. See root `CLAUDE.md`'s Todos for the remaining scope.
 
 ## Layout
 
@@ -99,8 +112,10 @@ turns the result into DOM/CSS/SVG — the entries below cover what's left here.
   `shape-geometry.ts` renders as a real outline instead of a rectangle (see `shape-tree.ts` below)
   — `applySvgFill` only handles a solid fill (`fill` attribute), `applySvgLine` a solid/dashed/
   dotted stroke (`stroke`/`stroke-width`/`stroke-dasharray`, width and dash lengths both in `cqw`
-  so they stay a consistent screen size regardless of the path's own non-uniformly-stretched
-  coordinate space — see `shape-geometry.ts`'s own doc comment); gradient/pattern/blip fills and a
+  for a consistent screen size regardless of the slide's own size, plus `vector-effect:
+non-scaling-stroke` so that stroke renders uniformly despite the path's own non-uniformly-
+  stretched coordinate space — see "Key design decision: SVG stroke width uses `vector-effect:
+non-scaling-stroke`" below); gradient/pattern/blip fills and a
   non-solid outline colour are left unset on these, the same "no faithful non-rectangular
   equivalent, don't guess a colour" reasoning `applyLine` already uses for a non-solid border
   colour.
@@ -113,7 +128,24 @@ turns the result into DOM/CSS/SVG — the entries below cover what's left here.
   percentage of its own box rather than an absolute unit. Returns `undefined` for `rect`/
   `roundRect`/`ellipse` and any preset outside the modeled subset — the caller falls back to a
   plain rectangle for the latter (today's pre-existing behaviour) and to `nativeBorderRadius` for
-  the former. `nativeBorderRadius` returns a CSS `border-radius` percentage for `roundRect` (from
+  the former, or now first tries `customGeometryPath` (new — see below) for a `custGeom` shape.
+  `customGeometryPath` renders `@pptx2html/presentation`'s `CustomGeometry.pathLst` (§20.1.9.8)
+  into the same `0 0 100 100` space: each `a:path`'s local `w`/`h` coordinate space scales onto it
+  the same way `presetShapePath`'s fixed space does, its `moveTo`/`lnTo`/`quadBezTo`/`cubicBezTo`/
+  `close` commands map directly onto SVG's `M`/`L`/`Q`/`C`/`Z`, and multiple `a:path` entries
+  concatenate into multiple subpaths within one `d` string — which SVG's default nonzero fill rule
+  renders as a hole wherever they overlap with opposite winding, exactly what a boolean "Subtract"
+  shape (an outer outline plus an inner cutout — PowerPoint's own `custGeom` output for a Merge
+  Shapes operation, e.g. `apps/web-demo/src/Presentation1.pptx`'s slide 3) needs, with no separate
+  fill-rule logic required. `arcTo` (§20.1.9.9) is the one command needing real conversion, not a
+  1:1 syntax mapping: OOXML defines it as a portion of an ellipse (radii `wR`/`hR`) that the
+  current pen position sits on at angle `stAng`, swinging `swAng` further, so the ellipse's centre
+  and end point are derived from the current pen position before being handed to SVG's own
+  `A rx ry 0 large-arc-flag sweep-flag x y` — not guaranteed bit-exact (the same tier as this
+  file's other underspecified-magnitude approximations) but not a stand-in either, it's the actual
+  ellipse math. A path whose `w`/`h` is `0` (nothing to scale against) is skipped;
+  `customGeometryPath` returns `undefined` if nothing in `pathLst` was renderable, same fallback as
+  an unmodeled preset. `nativeBorderRadius` returns a CSS `border-radius` percentage for `roundRect` (from
   its `adj` guide, capped at 50% so `adj`'s spec max of 50000 yields a full stadium/pill) and a
   fixed `50%` for `ellipse` — deliberately **not** folded into `presetShapePath`, since a plain
   `<div>` with `border-radius` already draws both exactly, including a border that correctly
@@ -148,8 +180,10 @@ turns the result into DOM/CSS/SVG — the entries below cover what's left here.
   see the design decision below). A picture's fill shows through any transparent
   pixels in the image itself, since `Picture` shares `ShapeProperties` with `Shape` — `renderConnector`
   doesn't call either yet, see the scope boundary below. Before doing that, `renderShape` first checks
-  `shape-geometry.ts`'s `presetShapePath` against the shape's own `geometry`: if it returns a path
-  (one of the nine non-rectangular presets it models), `renderShape` appends `renderShapeOutline`'s
+  `shape-geometry.ts`'s `presetShapePath` (falling back to `customGeometryPath` for a `custGeom`
+  shape, new) against the shape's own `geometry`: if either returns a path (one of the nine
+  non-rectangular presets `presetShapePath` models, or a `custGeom` with usable `pathLst` data),
+  `renderShape` appends `renderShapeOutline`'s
   `<svg>` overlay instead — sized to exactly cover the shape's box, `viewBox="0 0 100 100"` with
   `preserveAspectRatio="none"` so the fixed path stretches non-uniformly onto whatever aspect ratio
   the box actually has, one `<path>` styled via `fill.ts`'s `applySvgFill`/`applySvgLine` — and
@@ -166,7 +200,10 @@ turns the result into DOM/CSS/SVG — the entries below cover what's left here.
   placeholder (no `nvPr`/`ph` in the schema for `grpSp`). Percentages need a well-defined
   containing block to resolve against; stretching every nesting level to exactly the slide's size
   is what makes a doubly-nested child's percentage position still resolve correctly (see the
-  design decision below).
+  design decision below). `renderShapeTreeNode` (new) also stamps every rendered element with
+  `dataset.pptxShapeId` — its own `nonVisual.id`, the same id an `AnimationTarget` addresses — so
+  `presentation-element.ts`'s `#playSlideAnimations` can find a fade animation's target element by
+  a plain `querySelector('[data-pptx-shape-id="…"]')` within the slide's own subtree.
 - `slide.ts` — `renderSlide`: one `.pptx-slide` div, `position: relative; overflow: hidden`,
   `width: 100%` with `aspect-ratio: <slideWidth> / <slideHeight>` (raw EMU numbers — `aspect-ratio`
   only cares about the ratio) so it fills whatever width its container gives it and its height
@@ -194,7 +231,18 @@ turns the result into DOM/CSS/SVG — the entries below cover what's left here.
   `'fade'` — see that section for the mechanism (`#animatePush`/`#animateFade`,
   `#beginTransitionFrame`, `#awaitTransition`/`#finalizeTransition`); every other effect kind, and a
   slide with no `transition` at all, still takes the unchanged instant-swap path
-  (`#updateActiveSlide`).
+  (`#updateActiveSlide`). `#updateActiveSlide` (new) also calls `#playSlideAnimations`, which plays
+  the newly-active slide's fade animations (see `animation.ts` and "Key design decision:
+  `Slide.timing` fade animations" below) — this runs on every path that makes a slide active: the
+  initial `render()`, an instant no-transition swap, and `#finalizeTransition` once a push/fade
+  slide transition settles.
+- `animation.ts` — pure logic, no DOM: `collectFadeAnimations` walks a slide's `Slide.timing` tree
+  (`@pptx2html/presentation`'s `SlideTiming`/`TimeNode`) collecting the one behavior this renderer
+  plays — a `p:animEffect` (§19.7.9) with `filter === 'fade'` targeting a whole shape — into a flat
+  `ShapeFadeAnimation[]` (`shapeId`/`direction`/`delayMs`/`durationMs`), and reports everything else
+  it walks past (other filters, non-shape targets, every other behavior kind, an `'indefinite'`
+  duration, an unconsumed `buildList`) via its `report` callback — see "Key design decision:
+  `Slide.timing` fade animations" below for what's approximated and why.
 - `index.ts` — barrel + `renderPresentation`, which registers the element and returns one
   instance with `.render()` already called.
 
@@ -352,6 +400,30 @@ rung ordering.
 with an explicit `spPr` fill/line but no run colour of its own still gets this fallback correctly —
 `fontRef` and `fillRef`/`lnRef` are independent references on the same `p:style`, not a single
 all-or-nothing switch.
+
+## Key design decision: SVG stroke width uses `vector-effect: non-scaling-stroke`
+
+An actual bug, caught by the user right after `custGeom` support (above) shipped: a shape's SVG
+outline stroke (`applySvgLine`, `fill.ts`) rendered visibly thicker on some edges than others —
+e.g. thicker along vertical edges than horizontal ones — whenever the shape's own box wasn't
+square. The cause is `shape-geometry.ts`'s fixed `0 0 100 100` viewBox, `preserveAspectRatio="none"`
+stretched non-uniformly onto the shape's actual (usually non-square) box (see `shape-tree.ts`'s
+`renderShapeOutline`): a stroke is computed by offsetting the path in that _pre-transform_ user
+space, and only then does the browser apply the viewBox's own scale to get to screen pixels — so a
+constant-width offset in user space ends up a different number of screen pixels depending on which
+axis it's measured along, whenever that scale isn't the same in both directions. Giving
+`stroke-width` a real CSS length (`cqw`, already the case before this fix) does **not** avoid this:
+a CSS length used for an SVG geometry property still resolves into that same pre-transform user
+space, then gets warped by the same non-uniform transform as everything else — the file's own
+former doc comment claimed otherwise, which was the actual root cause of the bug shipping
+unnoticed. The real fix is `vector-effect="non-scaling-stroke"` (an SVG attribute, not a CSS
+property — broader support), set on the path whenever `applySvgLine` draws a stroke at all: it
+computes the stroke (both its width and its dasharray pattern) _after_ the transform instead of
+before, so it renders as the same physical thickness on every edge regardless of the path's own
+aspect ratio — restoring the "the SVG-native equivalent of `applyLine`'s CSS `border-width`"
+property the code already claimed to have, correctly this time. `fill.test.ts`'s `applySvgLine`
+block covers that the attribute is set exactly when a stroke is actually drawn (not for an explicit
+`noFill` line).
 
 ## Key design decision: a shape's text body is vertically anchored via flexbox
 
@@ -530,6 +602,188 @@ you're playing it in reverse.
 two-stage fade-out-to-black-then-in-from-black animation `throughBlack` describes is a deferred
 follow-up (see the scope boundary below), not implemented as a distinct path yet.
 
+## Key design decision: `Slide.timing` fade animations
+
+`Slide.transition` (above) is a single whole-slide effect; `Slide.timing` (§19.3.1.48, `p:timing`)
+is a different, much richer thing — a whole tree of per-element/per-build animations (PowerPoint's
+Animation Pane), where each leaf behavior targets one shape (or its text/background) and starts
+per its own click/delay/previous-effect condition. This first pass plays exactly one leaf behavior
+kind out of that tree: a `p:animEffect` (§19.7.9) whose `filter` is `"fade"` and whose target is a
+whole shape (`AnimationTarget`'s `{ kind: 'shape' }` case) — the common "Fade In"/"Fade Out"
+entrance/exit effect. Everything else the tree can contain — every other `animEffect` filter (wipe,
+blinds, ...), every other behavior kind (`set`/`anim`/`animClr`/`animMotion`/`animRot`/
+`animScale`/`cmd`/`audio`/`video`), a fade targeting text/background rather than a whole shape, and
+`SlideTiming.buildList`'s implicit paragraph/graphic builds — is walked past and reported via
+`reportUnsupported`, not silently dropped (`animation.ts`'s `collectFadeAnimations`).
+
+**Deliberately not a faithful implementation of PowerPoint's click-driven build system.** A real
+Animation Pane sequence nests effects inside `par`/`seq` containers whose own start conditions
+compose down the tree — an "After Previous" effect three levels deep waits for everything ahead of
+it, and an "On Click" effect waits for an actual click before starting. `to-html5` has no concept
+of an in-slide "build step" at all — a click always advances to the _next slide_ (see "slideshow
+navigation" above), never to the next animation within the current one — so faithfully modeling
+click-gated sequencing isn't an option without first inventing that concept, a materially bigger
+change than "start with fade" calls for. Instead, `collectFadeAnimations` treats every fade leaf
+node independently: its delay is `resolveTimeNodeStartMs`'s _own local_ answer for that node alone
+(`@pptx2html/presentation`'s `resolve/timing.ts`, new — see that package's CLAUDE.md), never
+composed with any ancestor `par`/`seq`/`excl` container's own offset, and a node gated on
+`onClick`/`onNext`/etc. with no numeric delay fallback still plays — immediately, at `delayMs: 0`
+— rather than waiting for a trigger nothing here can satisfy. `animation.ts`'s own doc comment
+covers the same ground; both approximations are reported once per slide
+(`animation-trigger-unmodeled`), not per node, to avoid flooding the log on a deck with many
+click-triggered effects.
+
+**Playback is triggered from the one place a slide actually becomes visible.**
+`PptxPresentationElement`'s `#updateActiveSlide` — already the single method every navigation path
+funnels through, whether an instant swap, the initial `render()`, or `#finalizeTransition` settling
+a push/fade slide transition — now also calls `#playSlideAnimations(this.#currentIndex)`. This
+means a slide's fade animations replay in full every time that slide becomes active again,
+including navigating back to a previously-visited slide — closer to how PowerPoint itself replays
+a slide's animations on (re-)entry than a "play once ever" model would be, and it comes for free
+from reusing the existing navigation chokepoint rather than adding a new one.
+
+**Target lookup is a plain `querySelector`, keyed by `data-pptx-shape-id`.** `shape-tree.ts`'s
+`renderShapeTreeNode` (see above) stamps every rendered element with its own `nonVisual.id` — the
+same id space `AnimationTarget.shapeId` addresses — so `#playSlideAnimations` finds a fade's target
+with `slide.querySelector('[data-pptx-shape-id="…"]')` scoped to that slide's own subtree, rather
+than needing a shapeId → element map threaded down through `renderSlide`.
+
+**Playback uses the Web Animations API (`Element.animate()`), fire-and-forget, not tracked or
+cancellable.** Consistent with this package's push/fade slide-transition playback (see above) and
+the same scroll-driven-playback motivation (a WAAPI `Animation`'s `currentTime` is directly
+seekable — see `docs/scroll-driven-playback.md`). Unlike slide transitions, though, fade
+animations are **not** added to `#currentAnimations` and never cancelled — `render()`'s existing
+"cancel every in-flight animation" cleanup only ever targeted slide-transition animations
+(mid-transition re-render is the scenario it guards), and a fade animation is a short, one-shot
+`fill: 'forwards'` effect with nothing else competing to interrupt it. Revisiting a slide queues a
+_new_ `Animation` on the same element/property each time rather than reusing or explicitly
+disposing of the previous one — by WAAPI's own composite-ordering rules the newest animation wins
+visually once it starts, so this doesn't look wrong, but it's the same class of "stale animation
+object left attached" debt `#finalizeTransition`'s own doc comment flags for slide transitions, not
+yet paid down here. Fine at the scale a single slide's animations run — not revisited for a slide
+with many fade-triggering navigations in one session.
+
+## Key design decision: Morph transitions
+
+`goToSlide` now plays PowerPoint's Morph transition (`MorphTransitionEffect`) too, via new
+`morph.ts` and `#animateMorph`, when `@pptx2html/presentation`'s `resolveMorphMatch` found a
+confident-enough shape correspondence between the two slides — otherwise it degrades to a plain
+crossfade (`#animateFade`). Morph is a fundamentally different kind of transition from every other
+one this package renders: `push`/`fade` are a single canned animation applied to one slide, but
+Morph requires a _correspondence between two slides' shapes_ — computed at `render()` time, not
+navigation time, and reduced away to plain data before being retained (see the next paragraph for
+why that reduction is a requirement, not a style choice).
+
+**No dependency on the `Presentation`/`Slide` object graph survives `render()` — this was an
+explicit, user-stated requirement, not an incidental design preference.** A key target for this
+project's output is a freestanding HTML file; every other piece of state `PptxPresentationElement`
+retains after `render()` (`#transitions`, `#animations`) was already small, flat, JSON-serializable
+data extracted from the graph, never the graph itself. An earlier draft of this feature considered
+storing `#slideGraphs: readonly Slide[]` and calling `resolveMorphMatch` lazily inside `goToSlide` —
+rejected before being implemented, specifically because it would have been the first thing in this
+element to hold the live object graph after creation. Instead, `render()` calls
+`resolveSlideMorphMatch(previousSlide, slide, report)` (`morph.ts`, new) once per slide, up front
+(same "log is complete even for slides never visited" principle `reportSlideLevelFeatures` already
+follows for `transition`/`timing`), which immediately reduces `resolveMorphMatch`'s actual
+`ShapeTreeNode` references down to a `MorphMatchSummary` — plain shape-id numbers only
+(`{ matched: { outgoingShapeId, incomingShapeId }[], disappearingShapeIds, appearingShapeIds }`) —
+before anything is stored in `#morphMatches`. `#animateMorph` (below) never touches `Slide`/
+`ShapeTreeNode` at all, only these plain ids plus `data-pptx-shape-id` DOM lookups.
+
+**Confidence check and crossfade fallback.** `resolveSlideMorphMatch` also owns the "is this match
+good enough to actually play" decision (`MIN_MORPH_MATCH_RATIO`, currently 1/3 of the larger side's
+shape count) — deliberately _not_ triggered by the mere presence of appearing/disappearing shapes,
+since real Morph slides routinely add/remove a shape on purpose (that's normal authoring, not a
+failure); it's triggered by an overall low match _rate_, the signal that the name-matching
+heuristic likely had little to go on at all. Below that threshold — or when there's no previous
+slide to morph from (Morph authored on the deck's first slide, nonsensical but not something to
+crash on) — it reports `morph-match-degraded` via `UnsupportedFeatureCollector` and `goToSlide`
+falls back to `#animateFade`, per the user's explicit requirement that a failed/degraded match be
+just as visible in the log as any other unsupported feature, not a silent approximation.
+
+**Box/fill values are read back off each shape's own already-rendered inline style, not
+recomputed.** `readShapeBox` reads a matched shape element's own `left`/`top`/`width`/`height`/
+`transform` — set once by `shape-tree.ts`'s `positionElement` at render time — directly as CSS
+strings, passed straight through into WAAPI keyframes with no numeric parsing/interpolation logic
+of this file's own. This mirrors `coordinate.ts`'s own "every element's box independently readable
+from its own inline styles" design decision (see above) — `#animateMorph` needed no new
+coordinate-resolution path at all, just a second reader of state `shape-tree.ts` already computes.
+Fill/colour interpolation is **not implemented this round** — only position/size/rotation/opacity
+animate; a matched shape's background colour, gradient, or SVG-outline fill jumps instantly rather
+than tweening, the same "ship the dominant visual signature first, defer fill nuance" tier as this
+package's other incremental passes (e.g. the nine SVG-path presets' solid-only fill).
+
+**The arriving copy alone moves, fully opaque throughout; the departing copy is hidden instantly,
+not faded — crossfading both was a real bug, caught by the user seeing text through a large solid
+shape mid-transition.** Like `push`/`fade`, both the outgoing and incoming slide stay
+simultaneously visible and independently animatable during a Morph transition
+(`#beginTransitionFrame`). The first version of `#animateMorph` animated _both_ copies of a matched
+pair between the same two boxes, fading 1→0 (departing) and 0→1 (incoming) respectively — the exact
+technique `#animateFade` correctly uses for whole-slide crossfades, just applied per-shape. That's
+wrong for a matched pair: alpha-compositing two _overlapping, opaque_ copies makes both visibly
+translucent for the middle of the tween, wrongly revealing whatever sits behind them — obvious on a
+large solid shape, which is exactly how the user caught it (a big orange shape that should only
+translate was visibly showing text through it partway through). A shape that persists between two
+slides should look like one continuous, fully opaque object gliding, the way real PowerPoint Morph
+renders it — not two ghosts blending. The fix: only the _arriving_ copy animates
+(`morphKeyframes`, deliberately with no `opacity` field at all, so it never leaves full opacity);
+the _departing_ copy gets a single zero-duration `Animation`
+(`departingEl.animate([{ opacity: 0 }], { duration: 0, fill: 'forwards' })`) — an instant switch,
+not a fade, timed to coincide exactly with the arriving copy's first frame (`morphKeyframes`'
+`from` endpoint is always the departing copy's own box), so nothing is ever visibly uncovered. A
+zero-duration `Animation` is still a real one (`.finished` resolves, `.cancel()` works), so it
+needs no special-casing anywhere else. `disappearingShapeIds`/`appearingShapeIds` are unaffected by
+any of this — those genuinely have no "moving box" interpretation (an object being added or
+removed, not relocated), so a smooth opacity fade is the _correct_ rendering for them, reusing the
+same plain single-keyframe fade `#playSlideAnimations` already established for `Slide.timing`
+fades.
+
+**Departing/arriving roles are fixed to the DOM parameters, not to `match`'s own labels — a real
+bug caught by a backward-navigation test before it shipped.** `resolveSlideMorphMatch` always
+matches "earlier-in-deck slide" against "later-in-deck slide" (`outgoingShapeId`/`incomingShapeId`
+name-space), regardless of which direction the presentation actually navigates — but
+`#animateMorph`'s own `outgoing`/`incoming` parameters always mean "currently shown, departing"/
+"about to show, arriving", exactly like `#animatePush`/`#animateFade`. An earlier version of this
+method conflated the two, remapping _which DOM element_ played which role for backward navigation
+(`outgoingSideEl = forward ? outgoing : incoming`) — which silently inverted the fade direction and
+looked up disappearing/appearing shapes in the wrong slide's subtree whenever navigating backward
+through a morph. The fix keeps `outgoing`'s shapes always fading 1→0 and `incoming`'s shapes always
+fading 0→1 (matching every other transition in this file), and instead swaps only _which shape id_
+(`departingShapeId`/`arrivingShapeId`, `fadeOutIds`/`fadeInIds`) gets looked up in each, based on
+`forward`. Covered by `presentation-element.test.ts`'s "reverses departing/arriving roles correctly
+for backward navigation" test — written specifically because reasoning through this by hand is
+exactly the kind of thing that's easy to get backward.
+
+**Every `Animation` `#animateMorph` produces — matched-pair tweens and plain
+disappearing/appearing fades alike — feeds into the existing `#awaitTransition`/
+`#finalizeTransition` bookkeeping, not a new tracking mechanism.** This matters for correctness,
+not just code reuse: `#finalizeTransition`'s existing cancellation loop is what reverts every
+animated shape's inline-style override back to its own base style once the transition settles.
+Without that, a departing shape (whose finished, `fill: 'forwards'` animation left it stuck at
+opacity `0`) would stay invisible the next time its own slide became active again — cancelling
+drops the override and falls back to the element's own unmodified inline style, which is always
+the correct resting state (see
+`#finalizeTransition`'s own doc comment for why this is true of every property this file ever
+animates). `#playSlideAnimations`'s fade animations are the one exception to "always track and
+cancel," and deliberately so — see that section's own note on why a short, non-repositioning,
+one-shot fade doesn't need it the way a departing morph shape's position override does.
+
+**Known gap: a Morph transition triggered via a non-adjacent `goToSlide()` jump can animate against
+the wrong DOM.** `resolveSlideMorphMatch` computes each slide's match against its immediate
+predecessor in the deck (`presentation.slides[slideIndex - 1]`) — correct for `.next()`/`.previous()`
+sequential navigation, which is how a real presentation is actually driven. But `goToSlide(n)`
+allows jumping to _any_ index from wherever `#currentIndex` currently is (same as it always has for
+`push`/`fade`, not new to Morph) — if that jump lands on a Morph-transitioned slide from somewhere
+other than its immediate predecessor, `#animateMorph` will look for shape ids that were matched
+against a slide that isn't actually the one being shown as `outgoing`, and simply skip any it can't
+find (`findShapeElement` returning `null`) rather than animating them. Not observed to crash or
+mis-animate anything it _does_ find — just silently animates fewer shapes than a sequential
+approach to the same destination would. Not fixed this round: real presentations are driven
+sequentially, and a general fix (matching against whichever slide is _actually_ current at
+navigation time, not a fixed predecessor) would mean computing `resolveMorphMatch` at navigation
+time again, reintroducing exactly the live-object-graph dependency this design deliberately avoided
+— see the "no dependency on the object graph" paragraph above.
+
 ## Scope boundary — what's intentionally unmodeled (yet)
 
 - **Run-level font colour only resolves solid fills.** `RunProperties.fill` can technically be a
@@ -542,17 +796,22 @@ follow-up (see the scope boundary below), not implemented as a distinct path yet
   own (now much thinner) `color.ts` hands it to CSS as-is) — a `shade`/`tint`/etc. stacked on a
   preset colour is silently dropped. Transforms are almost always applied to scheme colours in
   practice, not presets, so this is a narrow gap.
-- **`ShapeProperties.geometry` is rendered for a common subset of presets only.**
-  `shape-geometry.ts` covers twelve presets total: `rect` (the pre-existing default), `roundRect`
-  and `ellipse` (native `border-radius`), and nine more via a real SVG outline (triangle,
-  `rtTriangle`, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon, `star5`) — see
-  `shape-geometry.ts`'s and `fill.ts`'s own doc comments above. Outside that set (the other ~170
-  `ST_ShapeType` names — arrows, callouts, stars other than `star5`, flowchart shapes, etc.) a
-  shape/picture still renders as a plain rectangular box, and `custGeom` (freeform/custom path
-  outlines) remains entirely unmodeled — `packages/presentation`'s `CustomGeometry` carries no path
-  data (see that package's own scope boundary), so `presetShapePath` returns `undefined` for it and
-  the shape falls back to a rectangle. Adjustment-guide (`avLst`) handling is also approximate, not
-  spec-exact — see `shape-geometry.ts`'s doc comment. On the nine SVG-path presets, only a solid
+- **`ShapeProperties.geometry` is rendered for a common subset of presets, plus `custGeom` with a
+  usable `pathLst`.** `shape-geometry.ts` covers twelve presets total: `rect` (the pre-existing
+  default), `roundRect` and `ellipse` (native `border-radius`), and nine more via a real SVG
+  outline (triangle, `rtTriangle`, diamond, parallelogram, trapezoid, pentagon, hexagon, octagon,
+  `star5`) — see `shape-geometry.ts`'s and `fill.ts`'s own doc comments above. Outside that set
+  (the other ~170 `ST_ShapeType` names — arrows, callouts, stars other than `star5`, flowchart
+  shapes, etc.) a shape/picture still renders as a plain rectangular box. `custGeom` freeform
+  outlines (new — a later session) now render too, via `customGeometryPath`, for the "every path
+  fully resolved to literal coordinates" case `packages/presentation`'s `CustomGeometry.pathLst`
+  models (see that package's own scope boundary) — a `custGeom` whose reader parse dropped every
+  `a:path` (a `gdLst`-guide-referenced point somewhere in all of them) still falls back to a
+  rectangle, same as before. Adjustment-guide (`avLst`) handling is also approximate, not
+  spec-exact — see `shape-geometry.ts`'s doc comment; `customGeometryPath`'s `arcTo` conversion is
+  real ellipse math rather than an approximation, but not independently verified against a real
+  arc-containing deck yet (slide 3's own `custGeom` example only exercises `moveTo`/`lnTo`/`close`).
+  On the nine SVG-path presets and on `custGeom`, only a solid
   fill/stroke is supported; a gradient/pattern/blip fill or non-solid outline colour renders
   unfilled/uncoloured rather than an approximated single colour (see `fill.ts`'s `applySvgFill`/
   `applySvgLine`). `renderPicture` (`shape-tree.ts`) only applies the native `border-radius` half
@@ -610,18 +869,49 @@ follow-up (see the scope boundary below), not implemented as a distinct path yet
   `PptxPresentationElement` (or rendering many presentations in one page) will leak blob URLs.
   Deferred — would need the created URLs plumbed back up to `PptxPresentationElement` so it can
   revoke on re-render/disconnect.
-- **Only `push` and `fade` play a real slide transition.** Every other `TransitionEffect.kind`
-  (`wipe`, `cut`, `dissolve`, `newsflash`, `wheel`, `split`, `strips`, `zoom`, `blinds`, `checker`,
-  `comb`, `randomBar`, `circle`, `diamond`, `plus`, `pull`, `cover`, `random`, `wedge`) still takes
-  the plain instant swap — each is a reasonably self-contained addition to `goToSlide`'s dispatch in
-  `presentation-element.ts` once picked up, following the same pattern `#animatePush`/`#animateFade`
-  establish. `fade`'s `throughBlack: true` variant renders as a plain crossfade rather than its own
+- **`push`, `fade`, and now `morph` play a real slide transition; every other
+  `TransitionEffect.kind`** (`wipe`, `cut`, `dissolve`, `newsflash`, `wheel`, `split`, `strips`,
+  `zoom`, `blinds`, `checker`, `comb`, `randomBar`, `circle`, `diamond`, `plus`, `pull`, `cover`,
+  `random`, `wedge`) still takes the plain instant swap — each is a reasonably self-contained
+  addition to `goToSlide`'s dispatch in `presentation-element.ts` following the same pattern
+  `#animatePush`/`#animateFade` establish. `morph` (see "Key design decision: Morph transitions"
+  above for the full mechanism) plays a real per-shape interpolation when
+  `@pptx2html/presentation`'s `resolveMorphMatch` finds a confident-enough shape correspondence
+  between the two slides, verified against a real Morph transition on
+  `apps/web-demo/src/Presentation1.pptx`'s slide 4 (all 4 shapes matched, including one behind a
+  `custGeom` freeform outline); below that confidence threshold, or when there's no previous slide
+  to morph from, it falls back to a plain crossfade (`#animateFade`) and reports
+  `morph-match-degraded` via `UnsupportedFeatureCollector` — the user's explicit requirement that a
+  degraded match be just as visible in the log as any other unsupported feature, not a silent
+  approximation. Fill/colour interpolation on a matched shape is **not** implemented — only
+  position/size/rotation/opacity animate, the colour/gradient/pattern jumps instantly — and
+  word/character-level text morph (`MorphOption`'s `byWord`/`byChar`, vs. the `byObject` this
+  always plays regardless of the authored option) isn't modeled at all; both are documented,
+  deferred gaps, not silent ones — see "Key design decision: Morph transitions" above, and its own
+  note on the one known correctness gap (a non-adjacent `goToSlide()` jump landing on a Morph slide
+  can silently animate fewer shapes than expected). `fade`'s `throughBlack: true` variant renders as
+  a plain crossfade rather than its own
   real fade-to-black-then-in animation (see "Key design decision: push/fade slide transitions"
   above). `SlideTransition.advanceOnClick`/`.advanceAfter` (auto-advance timers) and
   `.sound`/`TransitionSoundAction` (playing/stopping audio during the transition) are both parsed by
   `packages/reader` already but entirely unconsumed here — a slide's transition only plays in
   response to explicit navigation (click/keyboard/`goToSlide`), never on its own after a timeout,
-  and no audio ever plays.
+  and no audio ever plays. `SlideTransition.durationMs` (new, from the `p14:dur` extension
+  attribute) _is_ consumed already, though — `resolveTransitionDurationMs(transition.speed,
+transition.durationMs)` is resolved once in `goToSlide` and threaded into `#animatePush`/
+  `#animateFade`, which no longer resolve duration themselves.
+- **Only a plain "fade" `animEffect` on a whole shape plays from `Slide.timing`.** See "Key design
+  decision: `Slide.timing` fade animations" above for the full picture; in scope-boundary terms:
+  every other `animEffect` filter (wipe, blinds, wheel, ...), every other behavior kind (`set`,
+  `anim`, `animClr`, `animMotion`, `animRot`, `animScale`, `cmd`, `audio`, `video`), a fade
+  targeting shape text/background rather than a whole shape, and `SlideTiming.buildList`'s implicit
+  paragraph/graphic builds (staged per-paragraph/per-series reveal) are all unmodeled — reported via
+  `animation-effect-unmodeled`/`animation-behavior-unmodeled`/`animation-build-unmodeled`, not
+  silently dropped. Real click-driven build-step sequencing (an "On Click"/"After Previous" effect
+  actually waiting on its trigger, rather than every fade playing immediately at its own local
+  delay) is also unmodeled — `to-html5` has no concept of an in-slide "build step" separate from
+  slide-granular navigation at all yet; adding one is a materially bigger change than this pass
+  attempted (`animation-trigger-unmodeled`).
 
 ## Tests
 
@@ -632,7 +922,14 @@ test — see that package's CLAUDE.md for what they cover now. `shape-geometry.t
 `units.test.ts` are the remaining pure-Node (no DOM) test files here, covering
 `presetShapePath`/`nativeBorderRadius`'s path/radius output per preset (including the `adj`-guide
 default vs. explicit-override cases and the 50%-cap edge case for `roundRect`/parallelogram/
-trapezoid/hexagon/octagon) and the EMU→px/pt/cqw conversion math, directly.
+trapezoid/hexagon/octagon) and the EMU→px/pt/cqw conversion math, directly. `shape-geometry.test.ts`'s
+new `customGeometryPath` block covers: a single moveTo/lnTo/close subpath with non-uniform `w`≠`h`
+scaling, multiple `a:path` entries concatenating into multiple subpaths (a boolean-subtract cutout
+shape), `quadBezTo`/`cubicBezTo` mapping to `Q`/`C`, `arcTo`'s ellipse-derived endpoint/flags for
+both a positive and a negative swing angle, and a zero-`w`/`h` path being dropped (falling back to
+`undefined` when nothing else is renderable). `shape-tree.test.ts`'s "preset geometry" block gained
+an end-to-end case rendering a two-subpath `custGeom` shape through `renderShapeTreeNode`, alongside
+its existing `ellipse`/`triangle`/unmodeled-preset (`cloud`) cases.
 
 `color.test.ts` is a `happy-dom`-free integration check of a different kind: it stayed in this
 package (unlike its former `color.ts` self, see the Layout note above) because it still exercises
@@ -731,7 +1028,58 @@ unsupported-effect-kind cases both still taking the unchanged instant-swap path 
 `pptx-slide--transitioning` class ever appears, `recordedAnimations` stays empty), navigation being
 ignored entirely across every input method (click/keydown/`.next()`/`.previous()`/`.goToSlide()`)
 while a transition is in flight and succeeding again once it elapses, and the exact
-`fast`/`med`/`slow` duration mapping (400/700/1000ms) as a pinned regression contract.
+`fast`/`med`/`slow` duration mapping (400/700/1000ms) as a pinned regression contract. Two more
+cases: an explicit `durationMs` (`p14:dur`) overriding `speed` entirely, and a genuinely still
+unmodeled effect kind (`wipe`) taking the instant-swap path and being reported via
+`transition-effect-unmodeled`.
+
+Nested inside that same block (reusing its `FakeAnimation`/`beforeEach`/`afterEach` and
+`slideEls`), `describe('morph transitions', ...)` has its own `morphShape`/`buildMorphPresentation`
+fixture builders (real `Shape`s with a `properties.transform`, rendered through the actual
+pipeline — not hand-set inline styles — so `readShapeBox` exercises real `positionElement` output)
+and covers: for a matched pair, the departing copy gets a single zero-duration `opacity: 0`
+`Animation` (not a fade) while the arriving copy's keyframes tween `left`/`top`/`width`/`height`/
+`transform` between the two real boxes with no `opacity` field at all (keyframe `left` values
+asserted against each element's own rendered `style.left`, the same "compare against the real
+computed value, not a hardcoded percentage" convention `slide.test.ts`'s `pct()` helper
+established) — this is the regression test for the translucency bug documented in "Key design
+decision: Morph transitions" above (an earlier crossfading-both-copies version made both visibly
+translucent mid-transition); a disappearing shape fades out in place and an appearing one fades in
+in place in the same transition, still a real two-keyframe opacity fade (unaffected by the above,
+since neither has a "moving box" interpretation); a low-confidence match (two shapes sharing no
+name at all) falls back to a plain whole-slide crossfade and reports `morph-match-degraded`; a
+Morph transition authored on the deck's very first slide reports the same code (nothing to morph
+from); and — the regression test that caught the departing/arriving role-swap bug, a second real
+bug documented in "Key design decision: Morph transitions" above — navigating backward through an
+already-played morph reverses which copy is instantly hidden vs. which one moves, asserted against
+both elements' own real boxes.
+
+`morph.test.ts` (new, pure Node, mirrors `animation.test.ts`'s style below) covers
+`resolveSlideMorphMatch` directly with a `vi.fn()` `report` callback: no previous slide reports and
+falls back; a fully-confident match reduces to plain shape-id pairs with nothing reported; a mixed
+match (some matched, some appearing/disappearing) still reports nothing since match _rate_ stays
+high; a below-threshold match rate and a zero-match slide both fall back and report
+`morph-match-degraded`; and a 100%-match case right at the confidence ceiling still plays.
+
+`animation.test.ts` (new, pure Node — mirrors `shape-geometry.test.ts`/`timing.test.ts`'s
+DOM-free-logic style) covers `collectFadeAnimations` directly, with small `animEffect`/`par`/`seq`
+builder helpers: a fade-in and fade-out `animEffect` targeting a shape, the `transition`-absent
+default of `'in'`, walking into nested `par`/`seq`/`excl` containers to find fade behaviors several
+levels deep, using a node's own numeric start delay, a click-gated node still playing at `delayMs:
+0` while reporting `animation-trigger-unmodeled` once, an `'indefinite'`-duration fade being
+skipped and reported, a non-`"fade"` filter and a non-shape target both being reported and not
+played, every other behavior kind being reported once per distinct kind (deduplicated), and an
+unconsumed `buildList` being reported. `shape-tree.test.ts`'s new "data-pptx-shape-id" block checks
+a rendered shape's and group's own element carry that dataset attribute, set from `nonVisual.id`.
+`presentation-element.test.ts`'s new `describe('Slide.timing fade animations', ...)` block (a
+separate, simpler `HTMLElement.prototype.animate` mock than the push/fade block's `FakeAnimation` —
+just a `vi.fn()` recording each call, since fade-animation playback never awaits `.finished`)
+covers: a fade-in plays on the target shape (found via `data-pptx-shape-id`) as soon as its slide
+is shown by `render()`, with the right keyframes/duration/delay/`fill: 'forwards'`; a fade-out
+gets reversed keyframes; and navigating away then back to a slide replays its fade animations
+(two recorded `.animate()` calls on the same target across the two visits), proving
+`#playSlideAnimations` runs from `#updateActiveSlide` on every path that makes a slide active, not
+just the first.
 
 ## Next likely steps
 
@@ -741,13 +1089,34 @@ while a transition is in flight and succeeding again once it elapses, and the ex
    pattern (now WAAPI-based — see that design decision above); `fade`'s `throughBlack: true`
    two-stage fade-to-black-then-in animation, `advanceOnClick`/`advanceAfter` auto-advance timers,
    and `TransitionSoundAction` playback are separate, currently unstarted pieces of that same
-   surface area (see the scope boundary above). Per-slide/per-element animations off `Slide.timing`
-   remain a separate, bigger piece of work (root `CLAUDE.md`'s Todos). This session's two enabling
-   pieces for a future scroll-driven-playback feature — a central duration-resolution API in
-   `@pptx2html/presentation` (`resolve/timing.ts`, see that package's CLAUDE.md) and migrating
-   slide-transition playback off plain CSS `transition` onto the Web Animations API — are both
-   done; read root `CLAUDE.md`'s "Future feature: scroll-driven playback" section /
-   `docs/scroll-driven-playback.md` before picking up either of the two items above, since the same
+   surface area. **`morph` is done, a later session** — parsing, shape-matching
+   (`@pptx2html/presentation`'s `resolve/morph.ts`'s `resolveMorphMatch`), and rendering
+   (`morph.ts`'s `resolveSlideMorphMatch`, `#animateMorph`) — see "Key design decision: Morph
+   transitions" above for the full mechanism and its honesty caveats (fill/colour doesn't
+   interpolate, word/character-level text morph isn't modeled, a non-adjacent `goToSlide()` jump
+   onto a Morph slide can silently animate fewer shapes than expected). Remaining Morph work, if
+   picked up further: fill/colour interpolation on matched shapes (reading `background-color` off
+   each element the same way box values already are, for the solid-fill case at least);
+   `byWord`/`byChar` text-level matching (needs `text.ts` to tag individual words/characters
+   instead of one `<span>` per run — a real DOM restructuring, not a small addition); and possibly
+   tuning `MIN_MORPH_MATCH_RATIO` (`morph.ts`) against more real Morph-authored decks than the one
+   fixture this was verified against.
+   Per-slide/per-element animations off `Slide.timing`
+   now have a first slice done (plain `"fade"` `animEffect` only — see "Key design decision:
+   `Slide.timing` fade animations" above); widening that is its own, larger piece of remaining
+   work — other `animEffect` filters (each a fairly mechanical addition once one exists, though
+   several — wipe, blinds — imply a CSS/SVG technique of their own, not just a new opacity
+   keyframe pair), `animMotion`/`animRot`/`animScale`/`animClr` (each a different CSS property to
+   drive), and real click-driven build-step sequencing (needs `to-html5` to grow an in-slide
+   "build step" concept distinct from slide-granular navigation — a materially bigger change than
+   any single new behavior kind, see that design decision's own "not a faithful implementation"
+   note). This session's two enabling pieces for a future scroll-driven-playback feature — a
+   central duration-resolution API in `@pptx2html/presentation` (`resolve/timing.ts`, see that
+   package's CLAUDE.md — now including `resolveTimeNodeStartMs`, the per-node start-delay answer
+   fade-animation playback also uses) and migrating slide-transition playback off plain CSS
+   `transition` onto the Web Animations API — are both done, and fade-animation playback followed
+   the same WAAPI-based pattern; read root `CLAUDE.md`'s "Future feature: scroll-driven playback"
+   section / `docs/scroll-driven-playback.md` before picking up any of the items above, since the same
    constraints (duration logic stays in `@pptx2html/presentation`, prefer WAAPI over plain CSS
    `transition`/`@keyframes`) apply to them too.
 2. `TextBodyProperties.wrap` → `white-space`, table cell fill, table styles — `anchor` is now done
@@ -759,23 +1128,31 @@ while a transition is in flight and succeeding again once it elapses, and the ex
 4. Widening `shape-geometry.ts`'s preset coverage — arrows (`rightArrow`/`leftArrow`/etc.), other
    star counts (`star4`/`star6`/etc.), and flowchart shapes are all common in real decks and not
    yet modeled; each is a straightforward addition to `presetShapePath`'s switch.
-5. Gradient/pattern/blip fill support on the nine SVG-path presets (currently solid-only, see the
-   scope boundary above) — an SVG `<linearGradient>`/`<pattern>` `<defs>` entry referenced via
+5. **Done, a later session**: `custGeom` freeform-outline rendering (`shape-geometry.ts`'s
+   `customGeometryPath`, `@pptx2html/presentation`'s `CustomGeometry.pathLst`) — see the Layout
+   section above and the scope boundary's updated `ShapeProperties.geometry` entry. Verified
+   end-to-end against a real fixture, `apps/web-demo/src/Presentation1.pptx`'s slide 3 (a boolean
+   "Subtract" shape). Remaining gaps in this specific area: `arcTo` conversion is unverified
+   against a real arc-containing deck (see the scope boundary), and gradient/pattern/blip fill on a
+   `custGeom` outline is unmodeled, same as the nine preset SVG paths (item 6 below covers both).
+6. Gradient/pattern/blip fill support on the nine SVG-path presets and `custGeom` outlines
+   (currently solid-only, see the scope boundary above) — an SVG `<linearGradient>`/`<pattern>`
+   `<defs>` entry referenced via
    `fill="url(#id)"` would parallel `resolveGradientCss`'s CSS-gradient output without the
    rectangular-background constraint, but needs its own angle/stop-position math since SVG
    gradients use `objectBoundingBox` coordinates, not CSS's `linear-gradient()` syntax.
-6. Clipping a picture to one of `shape-geometry.ts`'s nine SVG-path presets (not just `roundRect`/
-   `ellipse`'s native `border-radius`) — needs an `<svg><image>` + `<clipPath>` overlay in place of
-   the plain `<img>` `renderPicture` emits today.
-7. `p:style/effectRef` (see the scope boundary above) needs effect rendering to exist at all
+7. Clipping a picture to one of `shape-geometry.ts`'s nine SVG-path presets or a `custGeom` outline
+   (not just `roundRect`/`ellipse`'s native `border-radius`) — needs an `<svg><image>` +
+   `<clipPath>` overlay in place of the plain `<img>` `renderPicture` emits today.
+8. `p:style/effectRef` (see the scope boundary above) needs effect rendering to exist at all
    first (a bigger, separate gap) — `fontRef` is done, see "Key design decision: fontRef
    text-colour/typeface fallback lives in `resolveEffectiveRunProperties`, not a new resolver"
    above.
-8. Wiring a connector's own `p:style` (already parsed, `ShapeStyle` is on `ConnectionShape` too)
+9. Wiring a connector's own `p:style` (already parsed, `ShapeStyle` is on `ConnectionShape` too)
    into whatever connector line rendering eventually lands (see item 3 above) — today it's parsed
    but unused, since `renderConnector` doesn't call `applyFill`/`applyLine`/`effectiveFill`/
    `effectiveLine` at all yet.
-9. `apps/web-demo` now renders the parsed presentation into the page (see its own source) —
-   confirm this still looks right whenever this package's DOM structure changes, and now also
-   gains a working slideshow (click/keyboard navigation) for free once it re-renders with this
-   change, since `renderPresentation`'s returned element already wires it up.
+10. `apps/web-demo` now renders the parsed presentation into the page (see its own source) —
+    confirm this still looks right whenever this package's DOM structure changes, and now also
+    gains a working slideshow (click/keyboard navigation) for free once it re-renders with this
+    change, since `renderPresentation`'s returned element already wires it up.

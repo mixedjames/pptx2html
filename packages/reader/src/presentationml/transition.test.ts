@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import type { MediaResolver } from '../drawingml/fill.js';
+import { findAlternateContentChild } from '../xml/query.js';
 import { parseXml } from '../xml/parse.js';
-import { parseSlideTransition } from './transition.js';
+import { parseSlideTransition, pickTransitionNode } from './transition.js';
 
 function firstNode(xml: string) {
   const [root] = parseXml(xml);
@@ -99,6 +100,31 @@ describe('parseSlideTransition', () => {
     });
   });
 
+  it('parses morph with its option attribute', () => {
+    const node = firstNode(
+      `<p:transition ${NS} xmlns:p159="p159"><p159:morph option="byWord"/></p:transition>`,
+    );
+    expect(parseSlideTransition(node, noMedia)).toEqual({
+      effect: { kind: 'morph', option: 'byWord' },
+    });
+  });
+
+  it('parses morph with no option attribute (PowerPoint default is byObject, left absent here)', () => {
+    const node = firstNode(`<p:transition ${NS} xmlns:p159="p159"><p159:morph/></p:transition>`);
+    expect(parseSlideTransition(node, noMedia)).toEqual({ effect: { kind: 'morph' } });
+  });
+
+  it('parses an explicit p14:dur duration alongside spd', () => {
+    const node = firstNode(
+      `<p:transition ${NS} xmlns:p14="p14" spd="slow" p14:dur="2000"><p:fade/></p:transition>`,
+    );
+    expect(parseSlideTransition(node, noMedia)).toEqual({
+      speed: 'slow',
+      durationMs: 2000,
+      effect: { kind: 'fade' },
+    });
+  });
+
   it('resolves a stSnd sound action via the injected resolver, with loop', () => {
     const node = firstNode(
       `<p:transition ${NS}>
@@ -132,4 +158,55 @@ describe('parseSlideTransition', () => {
     const node = firstNode(`<p:transition ${NS}><p:sndAc><p:endSnd/></p:sndAc></p:transition>`);
     expect(parseSlideTransition(node, noMedia)).toEqual({ sound: { kind: 'stop' } });
   });
+});
+
+describe('pickTransitionNode', () => {
+  it('picks the Choice branch when its effect is recognized (morph)', () => {
+    const choice = firstNode(`<p:transition ${NS} xmlns:p159="p159"><p159:morph/></p:transition>`);
+    const resolved = firstNode(`<p:transition ${NS}><p:fade/></p:transition>`);
+    expect(pickTransitionNode({ choice, resolved })).toBe(choice);
+  });
+
+  it('falls back to the resolved branch when the Choice effect is unrecognized', () => {
+    const choice = firstNode(`<p:transition ${NS} xmlns:p188="p188"><p188:ripple/></p:transition>`);
+    const resolved = firstNode(`<p:transition ${NS}><p:fade/></p:transition>`);
+    expect(pickTransitionNode({ choice, resolved })).toBe(resolved);
+  });
+
+  it('returns the resolved branch when there is no Choice at all', () => {
+    const resolved = firstNode(`<p:transition ${NS}><p:push dir="u"/></p:transition>`);
+    expect(pickTransitionNode({ resolved })).toBe(resolved);
+  });
+
+  it('returns undefined when neither branch is present', () => {
+    expect(pickTransitionNode({})).toBeUndefined();
+  });
+
+  it(
+    'end-to-end: a real Morph-authored p:transition (mc:AlternateContent wrapping the whole ' +
+      'element, matching apps/web-demo/src/Presentation1.pptx slide 4) parses as morph, not the fade fallback',
+    () => {
+      const [root] = parseXml(
+        `<p:sld xmlns:p="p" xmlns:mc="mc">
+          <mc:AlternateContent>
+            <mc:Choice xmlns:p159="p159" Requires="p159">
+              <p:transition spd="slow" xmlns:p14="p14" p14:dur="2000">
+                <p159:morph option="byObject"/>
+              </p:transition>
+            </mc:Choice>
+            <mc:Fallback>
+              <p:transition spd="slow"><p:fade/></p:transition>
+            </mc:Fallback>
+          </mc:AlternateContent>
+        </p:sld>`,
+      );
+      const lookup = findAlternateContentChild(root!, 'transition');
+      const transition = parseSlideTransition(pickTransitionNode(lookup), noMedia);
+      expect(transition).toEqual({
+        speed: 'slow',
+        durationMs: 2000,
+        effect: { kind: 'morph', option: 'byObject' },
+      });
+    },
+  );
 });

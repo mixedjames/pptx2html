@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import type {
+  ConnectionShape,
   FormatScheme,
   GraphicFrame,
   Picture,
@@ -143,6 +144,47 @@ describe('renderShapeTreeNode preset geometry', () => {
     expect(path?.getAttribute('d')).toBe('M 50 0 L 100 100 L 0 100 Z');
     expect((path as unknown as SVGPathElement)?.style.fill).toBe('rgb(255, 0, 0)');
     expect((path as unknown as SVGPathElement)?.style.stroke).toBe('rgb(0, 0, 0)');
+  });
+
+  it('renders custGeom path data as an SVG path (a boolean-subtract cutout, two subpaths)', () => {
+    const shape: Shape = {
+      kind: 'shape',
+      nonVisual: { id: 9, name: 'Freeform 1' },
+      properties: {
+        geometry: {
+          type: 'custom',
+          pathLst: [
+            {
+              width: 100,
+              height: 100,
+              commands: [
+                { type: 'moveTo', point: { x: 0, y: 0 } },
+                { type: 'lnTo', point: { x: 100, y: 0 } },
+                { type: 'lnTo', point: { x: 100, y: 100 } },
+                { type: 'close' },
+              ],
+            },
+            {
+              width: 100,
+              height: 100,
+              commands: [
+                { type: 'moveTo', point: { x: 25, y: 25 } },
+                { type: 'lnTo', point: { x: 75, y: 25 } },
+                { type: 'close' },
+              ],
+            },
+          ],
+        },
+        fill: { type: 'solid', color: { type: 'srgb', value: 'FF0000' } },
+      },
+    };
+    const el = renderShapeTreeNode(document, shape, IDENTITY_MAP, CONTEXT);
+    expect(el.style.backgroundColor).toBe('');
+    const svg = el.querySelector('svg');
+    expect(svg).not.toBeNull();
+    const path = svg?.querySelector('path');
+    expect(path?.getAttribute('d')).toBe('M 0 0 L 100 0 L 100 100 Z M 25 25 L 75 25 Z');
+    expect((path as unknown as SVGPathElement)?.style.fill).toBe('rgb(255, 0, 0)');
   });
 
   it('falls back to a plain rectangle for an unsupported/absent preset', () => {
@@ -401,5 +443,147 @@ describe('renderShapeTreeNode unsupported-feature reporting', () => {
     renderShapeTreeNode(document, frame, IDENTITY_MAP, context);
 
     expect(reportUnsupported).not.toHaveBeenCalled();
+  });
+
+  it("reports that a connector's line is never rendered", () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const connector: ConnectionShape = {
+      kind: 'connector',
+      nonVisual: { id: 25, name: 'Straight Connector 1' },
+      properties: {},
+    };
+
+    renderShapeTreeNode(document, connector, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).toHaveBeenCalledWith('connector-line-unmodeled', expect.any(String), {
+      id: 25,
+      name: 'Straight Connector 1',
+    });
+  });
+
+  it('reports a gradient fill / non-solid outline colour dropped on an SVG-path preset', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const shape: Shape = {
+      kind: 'shape',
+      nonVisual: { id: 26, name: 'Triangle 1' },
+      properties: {
+        geometry: { type: 'preset', preset: 'triangle' },
+        fill: {
+          type: 'gradient',
+          stops: [
+            { position: 0, color: { type: 'srgb', value: 'FF0000' } },
+            { position: 100, color: { type: 'srgb', value: '0000FF' } },
+          ],
+        },
+        line: {
+          width: 12700,
+          fill: {
+            type: 'gradient',
+            stops: [
+              { position: 0, color: { type: 'srgb', value: 'FF0000' } },
+              { position: 100, color: { type: 'srgb', value: '0000FF' } },
+            ],
+          },
+        },
+      },
+    };
+
+    renderShapeTreeNode(document, shape, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'svg-preset-fill-unmodeled',
+      expect.stringContaining('"gradient"'),
+      { id: 26, name: 'Triangle 1' },
+    );
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'svg-preset-line-unmodeled',
+      expect.stringContaining('"gradient"'),
+      { id: 26, name: 'Triangle 1' },
+    );
+  });
+
+  it('does not report a solid fill/line on an SVG-path preset', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const shape: Shape = {
+      kind: 'shape',
+      nonVisual: { id: 27, name: 'Triangle 2' },
+      properties: {
+        geometry: { type: 'preset', preset: 'triangle' },
+        fill: { type: 'solid', color: { type: 'srgb', value: 'FF0000' } },
+        line: { width: 12700, fill: { type: 'solid', color: { type: 'srgb', value: '000000' } } },
+      },
+    };
+
+    renderShapeTreeNode(document, shape, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).not.toHaveBeenCalled();
+  });
+
+  it('reports that a picture crop is not applied outside rect/roundRect/ellipse', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    const picture: Picture = {
+      kind: 'picture',
+      nonVisual: { id: 28, name: 'Picture 1' },
+      properties: { geometry: { type: 'preset', preset: 'triangle' } },
+      image: { contentType: 'image/png', data: new Uint8Array([1, 2, 3]) },
+    };
+
+    renderShapeTreeNode(document, picture, IDENTITY_MAP, context);
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'picture-crop-unmodeled',
+      expect.stringContaining('"triangle"'),
+      { id: 28, name: 'Picture 1' },
+    );
+  });
+
+  it('does not report a picture crop for rect/roundRect/ellipse, or no geometry at all', () => {
+    const { context, reportUnsupported } = contextWithReport();
+    for (const geometry of [
+      { type: 'preset' as const, preset: 'rect' },
+      { type: 'preset' as const, preset: 'roundRect' },
+      { type: 'preset' as const, preset: 'ellipse' },
+      undefined,
+    ]) {
+      const picture: Picture = {
+        kind: 'picture',
+        nonVisual: { id: 29, name: 'Picture 2' },
+        properties: { geometry },
+        image: { contentType: 'image/png', data: new Uint8Array([1, 2, 3]) },
+      };
+      renderShapeTreeNode(document, picture, IDENTITY_MAP, context);
+    }
+
+    expect(reportUnsupported).not.toHaveBeenCalled();
+  });
+});
+
+describe('renderShapeTreeNode data-pptx-shape-id', () => {
+  it("tags the rendered element with the node's own nonVisual id, for animation.ts to target later", () => {
+    const shape: Shape = {
+      kind: 'shape',
+      nonVisual: { id: 99, name: 'Oval 1' },
+      properties: {},
+    };
+
+    const el = renderShapeTreeNode(document, shape, IDENTITY_MAP, CONTEXT);
+
+    expect(el.dataset.pptxShapeId).toBe('99');
+  });
+
+  it('tags a group (its wrapper carries the id an AnimationTarget can address)', () => {
+    const el = renderShapeTreeNode(
+      document,
+      {
+        kind: 'group',
+        nonVisual: { id: 5, name: 'Group 1' },
+        transform: { offset: { x: 0, y: 0 }, extents: { width: 1, height: 1 } },
+        children: [],
+      },
+      IDENTITY_MAP,
+      CONTEXT,
+    );
+
+    expect(el.dataset.pptxShapeId).toBe('5');
   });
 });

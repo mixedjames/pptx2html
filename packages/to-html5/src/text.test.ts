@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { Shape, SlideLayout, SlideMaster, TextBody } from '@pptx2html/presentation';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RenderContext } from './render-context.js';
 import { renderTextBody } from './text.js';
 
@@ -330,6 +330,37 @@ describe('renderTextBody', () => {
       const el = renderTextBody(document, textBody, undefined, BARE_CONTEXT);
       const labels = [...el.querySelectorAll('span.pptx-bullet')].map((b) => b.textContent);
       expect(labels).toEqual(['1.', '2.']);
+    });
+  });
+
+  describe('unsupported-feature reporting', () => {
+    it('reports wrap="none", with the passed-through shape ref', () => {
+      const reportUnsupported = vi.fn();
+      const textBody: TextBody = { properties: { wrap: 'none' }, paragraphs: [] };
+
+      renderTextBody(
+        document,
+        textBody,
+        undefined,
+        { ...BARE_CONTEXT, reportUnsupported },
+        undefined,
+        { id: 30, name: 'Text Box 1' },
+      );
+
+      expect(reportUnsupported).toHaveBeenCalledWith('text-wrap-unmodeled', expect.any(String), {
+        id: 30,
+        name: 'Text Box 1',
+      });
+    });
+
+    it('does not report wrap="square" or an absent wrap', () => {
+      const reportUnsupported = vi.fn();
+      for (const wrap of ['square' as const, undefined]) {
+        const textBody: TextBody = { properties: wrap ? { wrap } : {}, paragraphs: [] };
+        renderTextBody(document, textBody, undefined, { ...BARE_CONTEXT, reportUnsupported });
+      }
+
+      expect(reportUnsupported).not.toHaveBeenCalled();
     });
   });
 });

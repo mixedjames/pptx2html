@@ -26,7 +26,10 @@ element). A theme's `fmtScheme` fill/line style matrices (`fillStyleLst`/`lnStyl
 parsed too (`theme.ts`, reusing `drawingml/fill.ts`'s/`line.ts`'s own parsers), along with a
 shape/picture/connector's `p:style` `fillRef`/`lnRef` (`presentationml/shape-tree.ts`'s
 `parseShapeStyle`) — together these resolve the fill/line PowerPoint's Shape Styles gallery
-writes by default (a bare style reference, no explicit `spPr` fill/line at all). A blip's
+writes by default (a bare style reference, no explicit `spPr` fill/line at all). A shape's
+`a:custGeom` freeform outline (§20.1.9.8) is now parsed too — `drawingml/geometry.ts`'s `parsePath`/
+`parsePathCommand`, new — into `CustomGeometry.pathLst`, for the "every point is a literal
+coordinate" case (see the scope boundary below). A blip's
 `r:embed` can also live nested inside `<a:blip>/<a:extLst>` rather than directly on `<a:blip>`
 itself — PowerPoint's Icons gallery graphics are saved this way (`asvg:svgBlip`, an SVG-only
 blip with no `r:embed` on `<a:blip>` at all) — `drawingml/fill.ts`'s `blipEmbedId` (new) checks
@@ -40,11 +43,31 @@ the actual slide XML. A slide's
 `parseSlideTiming`, into `Slide.timing`; see `packages/presentation/CLAUDE.md`'s own note on this
 for why (unlike everything else in this list) `to-html5` doesn't consume it yet. A slide's
 `p:transition` (§19.3.1.49 — the whole-slide effect played when the presentation advances into it)
-is parsed the same way by new `presentationml/transition.ts`'s `parseSlideTransition`, into
+is parsed the same way by `presentationml/transition.ts`'s `parseSlideTransition`, into
 `Slide.transition`, including resolving its optional `p:sndAc` sound via the same `resolveMedia`
 already threaded through `readSlide` for the slide's shape tree/background — `to-html5` doesn't
-consume this either, deliberately deferred alongside `timing`. `tsc -b`,
-`eslint`, `vitest run` (whole repo) and `prettier --check` all pass as of this writing.
+consume this either, deliberately deferred alongside `timing`.
+
+**Morph transitions are now recognized correctly (new), not silently misread as their
+`mc:AlternateContent` fallback.** PowerPoint authors Morph as the _entire_ `<p:transition>` element
+wrapped in `mc:AlternateContent` — `mc:Choice`'s branch carries the real `<p:transition>` with
+`<p159:morph option="byObject"/>` inside it (plus, in practice, a `p14:dur` explicit-duration
+attribute alongside `spd`), `mc:Fallback`'s branch carries a schema-legal plain `<p:transition>`
+(typically `<p:fade/>`) for older PowerPoint versions — confirmed against a real Morph transition
+authored between slides 3 and 4 of `apps/web-demo/src/Presentation1.pptx`, not just documentation.
+`xml/query.ts`'s pre-existing `children()` always resolves `mc:AlternateContent` to the `Fallback`
+branch, so `readSlide` used to silently parse every Morph-authored slide as a plain fade instead —
+a real, previously-undetected gap this session's real fixture caught. Fixed via two additions:
+`xml/query.ts`'s new `findAlternateContentChild` surfaces _both_ branches (`choice`/`resolved`)
+instead of collapsing to one, and `transition.ts`'s new `pickTransitionNode` decides which whole
+`<p:transition>` to actually parse — the `Choice` branch, but only when its own effect is one this
+reader recognizes (currently just `p159:morph`), falling back to `resolved` (the Fallback, or the
+plain unwrapped element if there was no `mc:AlternateContent` at all) otherwise, so an extension
+effect this reader doesn't understand yet still gets _some_ real transition rather than none.
+`SlideTransition.durationMs` (new, from `p14:dur`) is parsed alongside `spd`/`advClick`/`advTm` in
+`parseSlideTransition`, unconditionally (not morph-specific — the attribute isn't schema-restricted
+to it). `tsc -b`, `eslint`, `vitest run` (whole repo) and `prettier --check` all pass as of this
+writing.
 
 ## Layout (mirrors `packages/presentation/src`'s own file layout 1:1)
 
@@ -59,7 +82,10 @@ consume this either, deliberately deferred alongside `timing`. `tsc -b`,
   by their exact raw name, because e.g. `p:sldMasterId` carries both a plain `id`
   and an `r:id` that collide if you strip prefixes. `query.ts`'s `children()` also
   transparently unwraps `mc:AlternateContent` to its `mc:Fallback` (or first
-  `mc:Choice` if no fallback) wherever nodes are walked.
+  `mc:Choice` if no fallback) wherever nodes are walked. `findAlternateContentChild` (new) is the
+  escape hatch from that unwrapping, for a caller (so far just `presentationml/transition.ts`'s
+  `pickTransitionNode`, for Morph) that wants to inspect the `Choice` branch's own content itself
+  rather than always accepting whatever `children()` already collapsed to.
 - `drawingml/`, `theme.ts`, `presentationml/` — one parser file per model file in
   `packages/presentation/src`. `drawingml/shape-common.ts`'s
   `parseNonVisualDrawingProperties` also parses a shape's `nvPr/ph` (§19.3.1.36,
@@ -101,10 +127,16 @@ two-phase order intact.
 
 ## Scope boundary
 
-Anywhere `packages/presentation` says "unmodeled" (custGeom path data, chart/smartArt/
+Anywhere `packages/presentation` says "unmodeled" (chart/smartArt/
 oleObject internals, table style matrices, `effectStyleLst`/`bgFillStyleLst`, `p:style`'s
 `effectRef`, theme overrides, custom shows, path gradients), the reader simply
-never reads that XML — it doesn't parse-then-discard. Don't add handling for these
+never reads that XML — it doesn't parse-then-discard. `custGeom` path data (`drawingml/geometry.ts`'s
+`parsePath`/`parsePathCommand`, new — a later session) is now parsed into `CustomGeometryPath`/
+`PathCommand`, but only the "literal coordinates only" slice `packages/presentation`'s own type
+models: a command whose point references a `gdLst` guide name instead of a literal number can't be
+represented, so its whole enclosing `a:path` is dropped rather than parsed into a corrupted
+outline (same "drop the unrepresentable unit, don't half-parse it" rule `parseAdjustValues`
+already follows for `avLst`). Don't add handling for the genuinely-unmodeled items above
 without first updating the corresponding type in `packages/presentation`.
 
 ## Tests
@@ -118,14 +150,21 @@ re-parsing).
 
 ## Open TODOs / known gaps
 
-- **No real (PowerPoint/LibreOffice-produced) `.pptx` fixture.** Only the synthetic
-  in-memory one exists. The original plan called this out as a nice-to-have via
-  `python-pptx`, but that's not installed in this environment and installing it
-  needs a `pip install` — deliberately not done without asking first. If you want
-  this, it's the one deferred item from the plan; see
-  `/Users/james/.claude/plans/sleepy-snuggling-oasis.md` for the original
-  reasoning (real output exercises `mc:AlternateContent`/prefix-binding quirks that
-  hand-written XML won't naturally produce).
+- **No real (PowerPoint/LibreOffice-produced) `.pptx` fixture in the _automated_ tests.** Only the
+  synthetic in-memory one exists there. `apps/web-demo/src/Presentation1.pptx` is real (now
+  including a genuine PowerPoint-authored Morph transition, added this session), and it already
+  paid for itself once — the original reasoning for wanting a real fixture (see below) was that
+  real output exercises `mc:AlternateContent`/prefix-binding quirks hand-written XML won't
+  naturally produce, and that's exactly what happened: manually inspecting slide 4's real
+  `p:transition` is what caught that `children()`'s Fallback-preferring unwrap was silently
+  swallowing Morph. It's still not wired into any automated test, though (the fix above was
+  verified via a one-off script, then covered by hand-written XML fixtures shaped to match — see
+  `transition.test.ts`'s "end-to-end" case). The original plan called a real _fixture_ out as a
+  nice-to-have via `python-pptx`, but that's not installed in this environment and installing it
+  needs a `pip install` — deliberately not done without asking first — and python-pptx can't author
+  Morph specifically regardless, since it has no support for PowerPoint's newer extension
+  transitions. See `/Users/james/.claude/plans/sleepy-snuggling-oasis.md` for the original
+  reasoning.
 - **`apps/web-demo` now renders into the page, not just `console.log`.** It depends
   on both `@pptx2html/reader` and `@pptx2html/to-html5`; `src/index.ts` calls
   `readPresentation` on the picked file, then `renderPresentation` and appends the

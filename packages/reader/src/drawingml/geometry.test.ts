@@ -52,8 +52,143 @@ describe('drawingml/geometry', () => {
     });
   });
 
-  it('parses custGeom as a kind-only marker', () => {
+  it('parses custGeom with no pathLst as a bare kind marker', () => {
     const node = firstNode('<a:spPr xmlns:a="a"><a:custGeom/></a:spPr>');
+    expect(findChildGeometry(node)).toEqual({ type: 'custom' });
+  });
+
+  it('parses a custGeom pathLst with two subpaths (a boolean-subtract rectangle-minus-star)', () => {
+    const node = firstNode(
+      `<a:spPr xmlns:a="a">
+        <a:custGeom>
+          <a:pathLst>
+            <a:path w="100" h="100">
+              <a:moveTo><a:pt x="0" y="0"/></a:moveTo>
+              <a:lnTo><a:pt x="100" y="0"/></a:lnTo>
+              <a:lnTo><a:pt x="100" y="100"/></a:lnTo>
+              <a:close/>
+            </a:path>
+            <a:path w="100" h="100">
+              <a:moveTo><a:pt x="10" y="10"/></a:moveTo>
+              <a:lnTo><a:pt x="20" y="10"/></a:lnTo>
+              <a:close/>
+            </a:path>
+          </a:pathLst>
+        </a:custGeom>
+      </a:spPr>`,
+    );
+    expect(findChildGeometry(node)).toEqual({
+      type: 'custom',
+      pathLst: [
+        {
+          width: 100,
+          height: 100,
+          commands: [
+            { type: 'moveTo', point: { x: 0, y: 0 } },
+            { type: 'lnTo', point: { x: 100, y: 0 } },
+            { type: 'lnTo', point: { x: 100, y: 100 } },
+            { type: 'close' },
+          ],
+        },
+        {
+          width: 100,
+          height: 100,
+          commands: [
+            { type: 'moveTo', point: { x: 10, y: 10 } },
+            { type: 'lnTo', point: { x: 20, y: 10 } },
+            { type: 'close' },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('parses quadBezTo, cubicBezTo and arcTo commands', () => {
+    const node = firstNode(
+      `<a:spPr xmlns:a="a">
+        <a:custGeom>
+          <a:pathLst>
+            <a:path w="100" h="100">
+              <a:moveTo><a:pt x="0" y="0"/></a:moveTo>
+              <a:quadBezTo>
+                <a:pt x="10" y="0"/>
+                <a:pt x="10" y="10"/>
+              </a:quadBezTo>
+              <a:cubicBezTo>
+                <a:pt x="20" y="10"/>
+                <a:pt x="20" y="20"/>
+                <a:pt x="30" y="20"/>
+              </a:cubicBezTo>
+              <a:arcTo wR="5" hR="5" stAng="0" swAng="5400000"/>
+            </a:path>
+          </a:pathLst>
+        </a:custGeom>
+      </a:spPr>`,
+    );
+    expect(findChildGeometry(node)).toEqual({
+      type: 'custom',
+      pathLst: [
+        {
+          width: 100,
+          height: 100,
+          commands: [
+            { type: 'moveTo', point: { x: 0, y: 0 } },
+            { type: 'quadBezTo', control: { x: 10, y: 0 }, point: { x: 10, y: 10 } },
+            {
+              type: 'cubicBezTo',
+              control1: { x: 20, y: 10 },
+              control2: { x: 20, y: 20 },
+              point: { x: 30, y: 20 },
+            },
+            { type: 'arcTo', widthRadius: 5, heightRadius: 5, startAngle: 0, swingAngle: 5400000 },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('drops a path containing a gdLst-guide-referenced coordinate rather than a corrupted outline', () => {
+    const node = firstNode(
+      `<a:spPr xmlns:a="a">
+        <a:custGeom>
+          <a:pathLst>
+            <a:path w="100" h="100">
+              <a:moveTo><a:pt x="0" y="0"/></a:moveTo>
+              <a:lnTo><a:pt x="csX0" y="10"/></a:lnTo>
+              <a:close/>
+            </a:path>
+            <a:path w="50" h="50">
+              <a:moveTo><a:pt x="1" y="1"/></a:moveTo>
+              <a:close/>
+            </a:path>
+          </a:pathLst>
+        </a:custGeom>
+      </a:spPr>`,
+    );
+    expect(findChildGeometry(node)).toEqual({
+      type: 'custom',
+      pathLst: [
+        {
+          width: 50,
+          height: 50,
+          commands: [{ type: 'moveTo', point: { x: 1, y: 1 } }, { type: 'close' }],
+        },
+      ],
+    });
+  });
+
+  it('falls back to a bare kind marker when every path was dropped', () => {
+    const node = firstNode(
+      `<a:spPr xmlns:a="a">
+        <a:custGeom>
+          <a:pathLst>
+            <a:path w="100" h="100">
+              <a:moveTo><a:pt x="csX0" y="0"/></a:moveTo>
+            </a:path>
+          </a:pathLst>
+        </a:custGeom>
+      </a:spPr>`,
+    );
     expect(findChildGeometry(node)).toEqual({ type: 'custom' });
   });
 });

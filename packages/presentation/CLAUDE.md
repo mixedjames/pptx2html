@@ -36,12 +36,17 @@ main remaining rendering gap — see `packages/to-html5/CLAUDE.md`. `tsc -b`, `e
 
 `Slide` also now carries an optional `timing` (`presentationml/animation.ts`, §19.3.1.48's
 `p:timing`): the element/build animation timing tree and build list `reader` parses off a slide.
-`to-html5` doesn't consume the tree itself yet (per-element/build animation rendering is still
-unstarted; `apps/web-demo` just logs it to the console) — but unlike when this was first written,
-there's no longer "nothing to derive" here: `resolve/timing.ts` (new) computes a node's/tree's own
-effective duration, since a scroll-driven-playback feature (see root `CLAUDE.md`'s design note,
-`docs/scroll-driven-playback.md`) needs exactly that answer and it's renderer-agnostic, same as
-every other file in `resolve/`.
+`to-html5` now consumes a first slice of it — a `p:animEffect` whose `filter` is `"fade"` targeting
+a whole shape (see that package's CLAUDE.md) — everything else in the tree (other filters, other
+behavior kinds, implicit paragraph/graphic builds, real click-driven build-step sequencing) is
+still unconsumed and reported as unsupported. `resolve/timing.ts` computes a node's/tree's own
+effective duration (`resolveTimeNodeDuration`/`resolveSlideTimingDuration`) and, since `to-html5`
+started actually playing animations, also a node's own local start delay
+(`resolveTimeNodeStartMs`, new) — both renderer-agnostic questions a scroll-driven-playback
+feature (see root `CLAUDE.md`'s design note, `docs/scroll-driven-playback.md`) needs the identical
+answer to, same as every other file in `resolve/`. `resolveTransitionDurationMs` (new) also takes
+an optional explicit `durationMs` (from `SlideTransition.durationMs`, sourced from the `p14:dur`
+extension attribute), which wins outright over the `speed` mapping when present.
 
 `Slide` also now carries an optional `transition` (`presentationml/transition.ts`, §19.3.1.49's
 `p:transition`): the single whole-slide effect (fade/wipe/push/split/wheel/zoom/... — the base
@@ -55,6 +60,37 @@ CLAUDE.md). Its optional sound (`TransitionSoundAction`, §19.3.1.49/50's `p:snd
 `drawingml/media.ts`'s `MediaPart` rather than inventing a parallel representation, the same
 relationship-resolved-to-object-graph choice every other embedded binary in this package makes;
 sound playback itself remains unconsumed by `to-html5`.
+
+`TransitionEffect` also now includes `MorphTransitionEffect` (new) — PowerPoint's Morph, the one
+"fancy" `p14:`/`p15:`/`p159:` extension transition this package recognizes so far (every other one
+remains genuinely unmodeled, see the scope boundary below). Unlike every other member of that
+union, Morph isn't a single canned animation on one slide: it matches shapes _between_ the outgoing
+and incoming slide (by name/id — PowerPoint's own algorithm, undocumented, not an OOXML-specified
+one) and interpolates position/size/rotation/fill per matched pair, crossfading whatever's
+unmatched; `option` (`byObject`/`byWord`/`byChar`) controls whether that matching also descends to
+individual words/characters within text. Still included directly in `TransitionEffect` (rather than
+a separate type) so a consumer can dispatch on `effect.kind` uniformly regardless of source.
+`resolve/morph.ts` (new) is where the actual shape-matching/diff step now lives —
+`resolveMorphMatch(outgoing, incoming)` flattens each slide's shape tree to its leaves (recursing
+through, but never matching, `GroupShape` containers themselves — see its own doc comment for why),
+groups same-named leaves, and pairs them: `id` first (unique within a slide, so a stronger identity
+signal than name alone whenever a same-named duplicate exists on both sides), then positionally as a
+last-resort tiebreak for anything still unpaired. A blank name (`""`) never matches anything, and
+matching is global across the whole flattened tree — a shape moving in or out of a group between
+the two slides still matches. Returns `{ matched, disappearing, appearing }`: matched pairs should
+morph, `disappearing` (unmatched outgoing) should fade out, `appearing` (unmatched incoming) should
+fade in. This is a genuinely undocumented algorithm PowerPoint itself doesn't publish beyond "match
+by name" — the `id`/positional tiebreaks are this package's own best-effort approximation, same tier
+as its other stand-ins for underspecified behaviour. **It does no reporting of its own** — this
+package has no dependency on `to-html5`'s `UnsupportedFeatureCollector`, so the caller (`to-html5`'s
+`morph.ts`, now wired up — see that package's CLAUDE.md's "Key design decision: Morph transitions")
+looks at `disappearing`/`appearing`'s size relative to the total shape count and decides whether to
+report a degraded/failed match, per root `CLAUDE.md`'s Todo 7's explicit requirement that this not
+be a silent crossfade fallback. `SlideTransition` also gained `durationMs`
+(new) — an explicit
+millisecond duration sourced from the `p14:dur` extension attribute, which beats `speed`'s
+qualitative fast/med/slow mapping outright when present (`resolveTransitionDurationMs`'s new second
+parameter) — seen in practice accompanying `p159:morph` but not schema-restricted to it.
 
 ## Key design decision: resolved object graph, not relationship IDs
 
@@ -169,7 +205,13 @@ itself defines.
   input, e.g. an `onClick`/`onNext` wait with no numeric delay fallback — the "is this
   presentation fully time-resolved" question `docs/scroll-driven-playback.md` needs; see that
   file's own doc comments for exactly which composition/repeat rules are exact vs. a documented
-  approximation).
+  approximation; `resolveTimeNodeStartMs` (new — same file) answers the smaller, node-local
+  question `resolveTimeNodeDuration`'s own `childContribution` only computes as an internal step:
+  can _this one node_ start on its own, in milliseconds, or is it waiting on a click/other
+  external event with no numeric delay — used by `to-html5`'s new fade-animation playback, which
+  needs that answer per node rather than a whole tree's composed duration), `morph.ts` (new —
+  `resolveMorphMatch` — the Morph transition's shape-matching/diff step between two `Slide`s; see
+  the Status section above for the algorithm and its honesty caveats).
 - `index.ts` / `drawingml/index.ts` / `presentationml/index.ts` / `resolve/index.ts` — barrel
   re-exports only.
 
@@ -183,7 +225,15 @@ file. `resolve/` has no reader counterpart by design: the reader never resolves 
 Each gap below is called out with a `§`-referenced comment at its point in the
 code (search for "unmodeled for the skeleton"):
 
-- Custom geometry path data (`custGeom` in `geometry.ts` carries no path).
+- Custom geometry path data (`custGeom` in `geometry.ts`, new) is now modeled — `CustomGeometry.pathLst`
+  carries one `CustomGeometryPath` per `a:path` (its own local `w`/`h` coordinate space plus an
+  ordered `PathCommand` list: `moveTo`/`lnTo`/`quadBezTo`/`cubicBezTo`/`arcTo`/`close`). Same
+  "literal values only" limitation as `ShapeGuide`'s `avLst` handling: a command whose point uses a
+  `gdLst`-guide-name reference instead of a literal coordinate can't be represented, so the reader
+  drops that whole `a:path` rather than emit a corrupted outline (see `packages/reader/CLAUDE.md`),
+  and `pathLst` is omitted entirely if no path in the shape was fully literal — the common case in
+  practice, since Merge Shapes/Freeform-drawn outlines are typically authored as literal points, not
+  guide-driven ones.
 - Effect and table style matrices referenced by a shape's/table's style index. `FormatScheme`'s
   fill/line style matrices (`fillStyleLst`/`lnStyleLst`) _are_ modeled and consumed (see
   `theme.ts`/`shape-style.ts` above) — but `effectStyleLst`/`bgFillStyleLst` (shadows and other
@@ -222,12 +272,14 @@ code (search for "unmodeled for the skeleton"):
   described by the real timing tree, with no implicit shorthand to represent).
 - `transition.ts`'s `TransitionEffect` covers every effect in the base schema's
   `EG_SlideTransition` choice group (§19.3.1.49 — blinds/checker/circle/comb/cover/cut/diamond/
-  dissolve/fade/newsflash/plus/pull/push/random/randomBar/split/strips/wedge/wheel/wipe/zoom), but
-  not PowerPoint's newer "fancy" transitions (Morph, Reveal, Ripple, Honeycomb, Vortex, Shred,
-  Switch, Airplane, Cube, Doors, Gallery, Prism, Origami, Pan, Ferris, Fracture, Crush, Curtains,
-  Windows, Warp, Glitter, Flythrough, ...), which PowerPoint authors as `p14:`/`p15:`/
-  `p159:` extension elements inside `p:transition`'s `p:extLst` rather than through that group —
-  parsing `p:extLst` at all is a separate, currently-unstarted piece of surface area.
+  dissolve/fade/newsflash/plus/pull/push/random/randomBar/split/strips/wedge/wheel/wipe/zoom),
+  plus (new) `MorphTransitionEffect` — see the Status section above for why an extension-sourced
+  effect lives in this union too. PowerPoint's _other_ newer "fancy" transitions (Reveal, Ripple,
+  Honeycomb, Vortex, Shred, Switch, Airplane, Cube, Doors, Gallery, Prism, Origami, Pan, Ferris,
+  Fracture, Crush, Curtains, Windows, Warp, Glitter, Flythrough, ...) remain unmodeled. (Morph
+  itself, in practice, turned out not to need `p:extLst` parsing at all — see `packages/reader/
+CLAUDE.md`'s scope boundary for the actual `mc:AlternateContent` shape PowerPoint writes, verified
+  against a real fixture; that finding may or may not generalize to the others.)
 
 **Rule for extending this**: if the reader needs to surface one of these, add the
 type here first, then implement the parser in `packages/reader`. Don't let the
@@ -237,7 +289,7 @@ avoiding.
 
 ## Tests
 
-`resolve/`'s seven files each have a `*.test.ts` sitting next to them, all pure Node (no DOM —
+`resolve/`'s files each have a `*.test.ts` sitting next to them, all pure Node (no DOM —
 nothing here needs one): `placeholder.test.ts` covers `resolveInheritedTransform`'s exact-match/
 type-only-fallback/master-fallback/no-match cases; `text-style.test.ts` covers the full
 `levelChain` walk (every rung from `defaultTextStyle` down to a run's own `rPr`/a paragraph's own
@@ -266,7 +318,20 @@ numeric start-condition delay adding into its contribution, a click-gated child 
 propagating `'indefinite'` up the whole tree, an OR'd condition list resolving via its one numeric
 member rather than going indefinite, `repeatCount`/`repeatCount: 'indefinite'`/`repeatDuration`/
 `autoReverse` each exercised on a leaf, a container's own explicit `duration` overriding its
-children-derived computation, and one nested-container composition case.
+children-derived computation, and one nested-container composition case. Its own
+`resolveTimeNodeStartMs` block (new) covers the same numeric/event/OR'd-conditions cases directly,
+plus that it deliberately ignores a parent container's own start offset (node-local only).
+`morph.test.ts` (new) covers `resolveMorphMatch` with small `shape`/`picture`/`group`/`slide`
+fixture builders (same convention): a simple 1:1 name match, an unmatched outgoing shape reported
+as `disappearing` and an unmatched incoming one as `appearing`, blank-named shapes never matching
+even when present on both sides, same-named duplicates disambiguated by `id` first, same-named
+duplicates with no `id` match falling back to positional pairing, excess duplicates on the larger
+side staying unmatched, recursing into a group without matching the group container itself, a
+shape matching correctly after moving out of a group entirely, matching across different node
+kinds (a picture placeholder replaced by an autoshape) sharing the same name/id, and an end-to-end
+case mirroring the real ids/names from `apps/web-demo/src/Presentation1.pptx`'s slides 3/4 (the
+"duplicate slide, then tweak a few shapes" authoring pattern) matching all four shapes with nothing
+appearing or disappearing.
 
 ## Next likely steps
 
@@ -277,8 +342,11 @@ children-derived computation, and one nested-container composition case.
    it yet (see that package's CLAUDE.md). Table _style matrices_ referenced by a table's style ID
    (banded rows, header row styling, etc.) are a separate, unmodeled gap — see the scope boundary
    above.
-2. Custom geometry path data is the remaining layout (not just formatting) gap most likely to
-   visibly matter next.
+2. **Done, a later session**: custom geometry path data (`geometry.ts`'s `CustomGeometry.pathLst`,
+   `CustomGeometryPath`, `PathCommand`) — the `custGeom` freeform outline PowerPoint writes for,
+   among other things, a boolean Merge Shapes result (a real example: `apps/web-demo/src/
+Presentation1.pptx`'s slide 3, a rectangle-minus-star "Subtract" shape). `to-html5`'s
+   `shape-geometry.ts` now consumes it (`customGeometryPath`) — see that package's CLAUDE.md.
 3. Widening `to-html5`'s preset-geometry coverage beyond its current common subset (see that
    package's CLAUDE.md) doesn't need anything new here — `PresetGeometry` already carries every
    preset name and any literal `val N` adjustment guide, a consumer just needs to turn more of
@@ -295,3 +363,28 @@ children-derived computation, and one nested-container composition case.
    nothing currently consumes exact values, so this hasn't mattered yet. Nothing in `to-html5`
    duplicates this logic; see that package's CLAUDE.md for how it now uses
    `resolveTransitionDurationMs`.
+5. **Done, a later session**: `resolve/timing.ts`'s `resolveTimeNodeStartMs` (new) — added once
+   `to-html5` started actually playing `Slide.timing` animations (fade only so far) and needed a
+   per-node "can this start on its own" answer that `resolveTimeNodeDuration` doesn't expose
+   (it only surfaces a _composed_ duration, folding a child's own start delay into its parent's
+   total rather than reporting it back). Kept in this package rather than duplicated in the
+   renderer per this file's own "resolution logic lives with the model" rule — `earliestMs`, the
+   private helper `resolveTimeNodeDuration` already used internally, just gained a second, public
+   entry point. See `to-html5/CLAUDE.md` for how it's used and what it deliberately doesn't do
+   (compose with ancestor containers' own offsets — that's real click-driven build sequencing,
+   still unmodeled there).
+6. **Done, an earlier session**: `MorphTransitionEffect`/`MorphOption` in `transition.ts` and
+   `SlideTransition.durationMs` — see the Status section above. **Done, this session**:
+   `resolve/morph.ts`'s `resolveMorphMatch` — matches shapes between two `Slide`s' shape trees
+   (recursing into, but never matching, `GroupShape` containers) and returns matched pairs plus
+   appearing/disappearing lists, by name with `id`/positional tiebreaks for duplicates. Whatever
+   matching heuristic this uses is inherently a best-effort approximation (PowerPoint's own
+   algorithm is undocumented), same honesty tier as this package's other best-effort stand-ins.
+   **Also done, a later session**: `to-html5` now consumes `resolveMorphMatch` end-to-end —
+   `presentation-element.ts` plays real Morph transitions, reducing the match to plain shape-id
+   data before storing anything (so no `Slide` object graph is retained after `render()`, a
+   requirement for a future freestanding-HTML-file export target) and reporting a degraded/
+   low-confidence match via `UnsupportedFeatureCollector` rather than silently playing it or
+   falling back with no explanation. See that package's CLAUDE.md's "Key design decision: Morph
+   transitions" for the full mechanism. Remaining gaps there: fill/colour interpolation and
+   `byWord`/`byChar` text-level matching, both deferred, not silent.

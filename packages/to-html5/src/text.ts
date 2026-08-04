@@ -22,6 +22,7 @@ import {
 import { resolveColor, resolveFillColor } from './color.js';
 import type { RenderContext } from './render-context.js';
 import { emuToCqw, fontSizeToEmu } from './units.js';
+import type { UnsupportedFeatureShapeRef } from './unsupported-features.js';
 
 /**
  * CSS has no "distributed" text-align keyword (OOXML's variant of justify that also stretches
@@ -221,9 +222,19 @@ export function renderTextBody(
   placeholder: Placeholder | undefined,
   context: RenderContext,
   shapeStyle?: ShapeStyle,
+  shapeRef?: UnsupportedFeatureShapeRef,
 ): HTMLElement {
   const container = doc.createElement('div');
   container.className = 'pptx-text-body';
+  // wrap="square" (the default) already matches an ordinary HTML block's own word-wrap, so only
+  // "none" (text should overflow its box unwrapped, needing white-space: nowrap) is unmodeled.
+  if (textBody.properties?.wrap === 'none') {
+    context.reportUnsupported?.(
+      'text-wrap-unmodeled',
+      'A text body with wrap="none" still wraps text normally here.',
+      shapeRef,
+    );
+  }
   const numbering = new NumberingState();
 
   for (const paragraph of textBody.paragraphs) {

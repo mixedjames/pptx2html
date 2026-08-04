@@ -120,9 +120,13 @@ export function applyLine(
 }
 
 /** SVG's own dasharray equivalent of `borderStyleFor`'s three-bucket CSS `border-style`
- * approximation — expressed as real CSS lengths (not unitless user-space numbers) so it renders
- * at a consistent screen size regardless of `shape-geometry.ts`'s non-uniformly-stretched
- * `0 0 100 100` viewBox (see `applySvgLine` below). `undefined` renders a solid line (no dashes). */
+ * approximation — expressed as real CSS lengths (`cqw`, not unitless user-space numbers) so the
+ * dash/gap pattern is a consistent screen size regardless of the slide's own size. On its own this
+ * wouldn't be enough to survive `shape-geometry.ts`'s non-uniformly-stretched `0 0 100 100`
+ * viewBox (a CSS length used inside SVG still gets resolved into that pre-transform user space,
+ * then warped by the same non-uniform transform as everything else) — `applySvgLine`'s
+ * `vector-effect: non-scaling-stroke` (below) is what actually fixes that, for the dash pattern as
+ * well as the stroke width it's named for. `undefined` renders a solid line (no dashes). */
 function svgDasharrayFor(line: Line): string | undefined {
   if (line.compound === 'double') return undefined; // no SVG equivalent either; same fallback as borderStyleFor.
   switch (line.dashStyle) {
@@ -165,6 +169,15 @@ export function applySvgLine(
   path.style.stroke = 'none';
   if (!line || line.fill?.type === 'none') return;
   path.style.strokeWidth = emuToCqw(line.width ?? DEFAULT_LINE_WIDTH_EMU, slideWidth);
+  // shape-geometry.ts's paths render inside a viewBox stretched non-uniformly onto the shape's
+  // actual (usually non-square) box — a stroke is offset from the path in that same pre-transform
+  // user space, so without this it would visibly render thicker along one axis than the other
+  // (e.g. thicker on vertical edges than horizontal ones) once that non-uniform transform is
+  // applied. `non-scaling-stroke` computes the stroke after the transform instead, so `strokeWidth`
+  // above renders as the same physical thickness on every edge regardless of the path's own
+  // aspect ratio — the SVG-native equivalent of `applyLine`'s CSS `border-width`, which never has
+  // this problem since a CSS border isn't subject to any such coordinate-system transform.
+  path.setAttribute('vector-effect', 'non-scaling-stroke');
   const dasharray = svgDasharrayFor(line);
   if (dasharray) path.style.strokeDasharray = dasharray;
   const color = line.fill ? resolveFillColor(line.fill, scheme) : undefined;

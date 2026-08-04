@@ -23,8 +23,17 @@ const TRANSITION_SPEED_DURATIONS_MS: Record<TransitionSpeed, number> = {
   slow: 1000,
 };
 
-export function resolveTransitionDurationMs(speed: TransitionSpeed | undefined): number {
-  return TRANSITION_SPEED_DURATIONS_MS[speed ?? 'fast']; // absent means the spec default, "fast"
+/**
+ * `durationMs` (`SlideTransition.durationMs`, sourced from the `p14:dur` extension attribute) is
+ * an explicit, spec-exact value when present, so it wins outright over `speed`'s three-tier
+ * approximation rather than being blended with it — the same "first defined value wins outright"
+ * pattern this package's other resolvers use for a whole-value fallback.
+ */
+export function resolveTransitionDurationMs(
+  speed: TransitionSpeed | undefined,
+  durationMs?: number,
+): number {
+  return durationMs ?? TRANSITION_SPEED_DURATIONS_MS[speed ?? 'fast']; // absent speed means "fast"
 }
 
 /**
@@ -52,6 +61,22 @@ function conditionDelayMs(condition: TimeCondition): number | 'indefinite' {
   // No explicit delay: an event-gated condition (onClick/onNext/...) waits for that event
   // indefinitely; a condition with neither a delay nor an event fires immediately.
   return condition.event !== undefined ? 'indefinite' : 0;
+}
+
+/**
+ * The earliest a node could start playing on its own account, in milliseconds — 0 if it has no
+ * start conditions at all, or 'indefinite' if every one needs external input (a click, a
+ * mouseover, ...) with no numeric delay fallback (§19.7.4's OR semantics — the node fires as soon
+ * as any one condition is satisfied). Deliberately doesn't account for a parent container's own
+ * start offset the way `resolveTimeNodeDuration`'s internal `childContribution` does for
+ * total-duration purposes — this answers a different, node-local question: can *this* node play
+ * unattended, or is it waiting on interaction nothing here models yet? Exported for exactly that
+ * use — see `@pptx2html/to-html5`'s fade-animation playback, which plays every fade node it finds
+ * at its own local delay (ignoring ancestor click-gating/sequencing) rather than modeling
+ * PowerPoint's full click-driven build system.
+ */
+export function resolveTimeNodeStartMs(node: TimeNode): number | 'indefinite' {
+  return earliestMs(node.common.startConditions);
 }
 
 /**

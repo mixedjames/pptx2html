@@ -3,6 +3,7 @@ import type { CommonTimeNodeData, TimeCondition, TimeNode } from '../presentatio
 import {
   resolveSlideTimingDuration,
   resolveTimeNodeDuration,
+  resolveTimeNodeStartMs,
   resolveTransitionDurationMs,
 } from './timing.js';
 
@@ -40,6 +41,11 @@ describe('resolveTransitionDurationMs', () => {
 
   it('defaults absent speed to "fast"', () => {
     expect(resolveTransitionDurationMs(undefined)).toBe(400);
+  });
+
+  it('lets an explicit durationMs override speed outright', () => {
+    expect(resolveTransitionDurationMs('slow', 2000)).toBe(2000);
+    expect(resolveTransitionDurationMs(undefined, 2000)).toBe(2000);
   });
 });
 
@@ -152,5 +158,41 @@ describe('resolveSlideTimingDuration', () => {
 
   it("delegates to resolveTimeNodeDuration for the timing's own tree", () => {
     expect(resolveSlideTimingDuration({ timeNodeTree: leaf({ duration: 250 }) })).toBe(250);
+  });
+});
+
+describe('resolveTimeNodeStartMs', () => {
+  it('is 0 when the node has no start conditions', () => {
+    expect(resolveTimeNodeStartMs(leaf())).toBe(0);
+  });
+
+  it('uses an explicit numeric delay', () => {
+    expect(resolveTimeNodeStartMs(leaf({ startConditions: [{ delay: 300 }] }))).toBe(300);
+  });
+
+  it('is "indefinite" for an event-gated condition with no delay fallback', () => {
+    expect(resolveTimeNodeStartMs(leaf({ startConditions: [{ event: 'onClick' }] }))).toBe(
+      'indefinite',
+    );
+  });
+
+  it('fires immediately for a condition with neither a delay nor an event', () => {
+    expect(resolveTimeNodeStartMs(leaf({ startConditions: [{}] }))).toBe(0);
+  });
+
+  it("takes the earliest of multiple OR'd conditions", () => {
+    expect(
+      resolveTimeNodeStartMs(
+        leaf({ startConditions: [{ event: 'onClick' }, { delay: 500 }, { delay: 100 }] }),
+      ),
+    ).toBe(100);
+  });
+
+  it("does not add in a parent container's own start offset", () => {
+    // Node-local only — composing with an ancestor's offset is a renderer's own job if it needs
+    // that, not this function's (see its own doc comment).
+    const child = leaf({ startConditions: [{ delay: 200 }] });
+    par([child], { startConditions: [{ delay: 1000 }] });
+    expect(resolveTimeNodeStartMs(child)).toBe(200);
   });
 });

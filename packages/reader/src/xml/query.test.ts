@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseXml } from './parse.js';
-import { attr, children, findAllChildren, findChild, localName, textOf } from './query.js';
+import {
+  attr,
+  children,
+  findAllChildren,
+  findAlternateContentChild,
+  findChild,
+  localName,
+  textOf,
+} from './query.js';
 
 describe('xml/query', () => {
   it('preserves document order across differently-named siblings', () => {
@@ -42,6 +50,46 @@ describe('xml/query', () => {
       </p:spTree>`,
     );
     expect(children(root!).map((node) => localName(node))).toEqual(['sp']);
+  });
+
+  describe('findAlternateContentChild', () => {
+    it('returns both the Choice and Fallback branch versions of a wrapped child', () => {
+      const [root] = parseXml(
+        `<p:sld xmlns:p="p" xmlns:mc="mc" xmlns:p159="p159">
+          <mc:AlternateContent>
+            <mc:Choice Requires="p159"><p:transition><p159:morph/></p:transition></mc:Choice>
+            <mc:Fallback><p:transition><p:fade/></p:transition></mc:Fallback>
+          </mc:AlternateContent>
+        </p:sld>`,
+      );
+      const { choice, resolved } = findAlternateContentChild(root!, 'transition');
+      expect(choice && findChild(choice, 'morph')).toBeDefined();
+      expect(resolved && findChild(resolved, 'fade')).toBeDefined();
+    });
+
+    it('returns the same node for choice and resolved when there is no Fallback', () => {
+      const [root] = parseXml(
+        `<p:sld xmlns:p="p" xmlns:mc="mc" xmlns:p159="p159">
+          <mc:AlternateContent>
+            <mc:Choice Requires="p159"><p:transition><p159:morph/></p:transition></mc:Choice>
+          </mc:AlternateContent>
+        </p:sld>`,
+      );
+      const { choice, resolved } = findAlternateContentChild(root!, 'transition');
+      expect(choice).toBe(resolved);
+    });
+
+    it('returns only resolved for a plain, unwrapped child', () => {
+      const [root] = parseXml(`<p:sld xmlns:p="p"><p:transition><p:push/></p:transition></p:sld>`);
+      const { choice, resolved } = findAlternateContentChild(root!, 'transition');
+      expect(choice).toBeUndefined();
+      expect(resolved && findChild(resolved, 'push')).toBeDefined();
+    });
+
+    it('returns an empty object when the named child is absent entirely', () => {
+      const [root] = parseXml(`<p:sld xmlns:p="p"><p:cSld/></p:sld>`);
+      expect(findAlternateContentChild(root!, 'transition')).toEqual({});
+    });
   });
 
   it('finds all matching children and concatenates nested text', () => {

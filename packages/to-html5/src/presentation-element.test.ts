@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import type { Presentation, SlideLayout, SlideTransition } from '@pptx2html/presentation';
+import type { Presentation, Shape, SlideLayout, SlideTransition } from '@pptx2html/presentation';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { definePresentationElement, PptxPresentationElement } from './presentation-element.js';
 
@@ -489,6 +489,74 @@ describe('PptxPresentationElement', () => {
       expect(unsupportedFeatures.all).toHaveLength(0);
     });
 
+    it('reports nothing for an empty Slide.timing (no timeNodeTree or buildList)', () => {
+      const presentation: Presentation = {
+        slideSize: { width: 12192000, height: 6858000 },
+        slideMasters: [],
+        slides: [
+          { commonSlideData: { shapeTree: [] }, layout: LAYOUT },
+          { commonSlideData: { shapeTree: [] }, layout: LAYOUT, timing: {} },
+        ],
+        notesSlides: [],
+      };
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      const unsupportedFeatures = el.render(presentation);
+
+      expect(unsupportedFeatures.all).toEqual([]);
+    });
+
+    it('reports an unplayed animation behavior kind, attributed to the right slide', () => {
+      const presentation: Presentation = {
+        slideSize: { width: 12192000, height: 6858000 },
+        slideMasters: [],
+        slides: [
+          { commonSlideData: { shapeTree: [] }, layout: LAYOUT },
+          {
+            commonSlideData: { shapeTree: [] },
+            layout: LAYOUT,
+            timing: { timeNodeTree: { kind: 'animClr', common: { id: 0 } } },
+          },
+        ],
+        notesSlides: [],
+      };
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      const unsupportedFeatures = el.render(presentation);
+
+      expect(unsupportedFeatures.all).toEqual([
+        {
+          code: 'animation-behavior-unmodeled',
+          message: 'Animation behavior kind(s) animClr are not played.',
+          slideIndex: 1,
+        },
+      ]);
+    });
+
+    it('reports fade throughBlack, advanceOnClick=false, advanceAfter, and an authored sound action', () => {
+      const presentation = buildPresentation([
+        {
+          effect: { kind: 'fade', throughBlack: true },
+          advanceOnClick: false,
+          advanceAfter: 5000,
+          sound: { kind: 'stop' },
+        },
+      ]);
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      const unsupportedFeatures = el.render(presentation);
+
+      const codes = unsupportedFeatures.all.map((feature) => feature.code);
+      expect(codes).toEqual(
+        expect.arrayContaining([
+          'transition-through-black-unmodeled',
+          'transition-advance-on-click-unmodeled',
+          'transition-advance-after-unmodeled',
+          'transition-sound-unmodeled',
+        ]),
+      );
+      // fade itself IS supported, so no transition-effect-unmodeled entry should be present.
+      expect(codes).not.toContain('transition-effect-unmodeled');
+      expect(unsupportedFeatures.all).toHaveLength(4);
+    });
+
     it('ignores navigation entirely while a transition is in flight', async () => {
       const presentation = buildPresentation([undefined, { effect: { kind: 'fade' } }, undefined]);
       const el = document.createElement('pptx-presentation') as PptxPresentationElement;
@@ -540,6 +608,289 @@ describe('PptxPresentationElement', () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(incoming?.classList.contains('pptx-slide--transitioning')).toBe(false);
       }
+    });
+
+    it('lets an explicit durationMs (p14:dur) override speed entirely', async () => {
+      const presentation = buildPresentation([
+        undefined,
+        { effect: { kind: 'fade' }, speed: 'slow', durationMs: 2000 },
+      ]);
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      el.render(presentation);
+
+      el.next();
+      const [, incoming] = slideEls(el);
+      expect(latestAnimation(incoming!)?.options).toMatchObject({ duration: 2000 });
+
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    it('an unmodeled effect kind (e.g. wipe) falls back to the instant swap and is reported unsupported', () => {
+      const presentation = buildPresentation([undefined, { effect: { kind: 'wipe' } }]);
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      const unsupportedFeatures = el.render(presentation);
+
+      el.next();
+      expect(el.currentSlideIndex).toBe(1);
+      const [, incoming] = slideEls(el);
+      expect(incoming?.classList.contains('pptx-slide--active')).toBe(true);
+      expect(incoming?.classList.contains('pptx-slide--transitioning')).toBe(false);
+
+      expect(unsupportedFeatures.all).toContainEqual(
+        expect.objectContaining({ code: 'transition-effect-unmodeled', slideIndex: 1 }),
+      );
+    });
+
+    describe('morph transitions', () => {
+      function morphShape(id: number, name: string, x: number, y: number): Shape {
+        return {
+          kind: 'shape',
+          nonVisual: { id, name },
+          properties: {
+            transform: { offset: { x, y }, extents: { width: 1000000, height: 1000000 } },
+          },
+        };
+      }
+
+      function buildMorphPresentation(
+        slides: readonly { shapes?: readonly Shape[]; transition?: SlideTransition }[],
+      ): Presentation {
+        return {
+          slideSize: { width: 12192000, height: 6858000 },
+          slideMasters: [],
+          slides: slides.map(({ shapes, transition }) => ({
+            commonSlideData: { shapeTree: shapes ?? [] },
+            layout: LAYOUT,
+            ...(transition ? { transition } : {}),
+          })),
+          notesSlides: [],
+        };
+      }
+
+      it('moves the arriving copy opaquely between the two boxes and hides the departing copy instantly (not a fade)', async () => {
+        const presentation = buildMorphPresentation([
+          { shapes: [morphShape(1, 'Title 1', 0, 0)] },
+          {
+            shapes: [morphShape(1, 'Title 1', 1000000, 2000000)],
+            transition: { effect: { kind: 'morph' } },
+          },
+        ]);
+        const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+        el.render(presentation);
+
+        const [outgoingSlide, incomingSlide] = slideEls(el);
+        const departing = outgoingSlide!.querySelector<HTMLElement>('[data-pptx-shape-id="1"]')!;
+        const arriving = incomingSlide!.querySelector<HTMLElement>('[data-pptx-shape-id="1"]')!;
+
+        el.next();
+
+        // Crossfading two overlapping opaque copies would make both translucent mid-transition
+        // (the bug this design avoids) — the departing copy is switched off instantly instead.
+        const departingAnim = latestAnimation(departing);
+        expect(departingAnim?.keyframes).toEqual([{ opacity: 0 }]);
+        expect(departingAnim?.options).toMatchObject({ duration: 0 });
+
+        // The arriving copy alone carries the "same object moving" illusion: no opacity field at
+        // all, so it stays fully opaque for its whole journey from the departing box to its own.
+        const arrivingKeyframes = latestAnimation(arriving)?.keyframes;
+        expect(arrivingKeyframes).toBeDefined();
+        expect(arrivingKeyframes![0]).toMatchObject({ left: departing.style.left });
+        expect(arrivingKeyframes![1]).toMatchObject({ left: arriving.style.left });
+        expect(arrivingKeyframes![0]!.opacity).toBeUndefined();
+        expect(arrivingKeyframes![1]!.opacity).toBeUndefined();
+        expect(incomingSlide?.classList.contains('pptx-slide--transitioning')).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      it('fades a disappearing shape out in place and an appearing shape in in place', async () => {
+        const presentation = buildMorphPresentation([
+          { shapes: [morphShape(1, 'Title 1', 0, 0), morphShape(2, 'Old Icon', 500000, 500000)] },
+          {
+            shapes: [morphShape(1, 'Title 1', 0, 0), morphShape(3, 'New Icon', 700000, 700000)],
+            transition: { effect: { kind: 'morph' } },
+          },
+        ]);
+        const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+        el.render(presentation);
+
+        const [outgoingSlide, incomingSlide] = slideEls(el);
+        const oldIcon = outgoingSlide!.querySelector<HTMLElement>('[data-pptx-shape-id="2"]')!;
+        const newIcon = incomingSlide!.querySelector<HTMLElement>('[data-pptx-shape-id="3"]')!;
+
+        el.next();
+
+        expect(latestAnimation(oldIcon)?.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+        expect(latestAnimation(newIcon)?.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      it('falls back to a plain crossfade and reports morph-match-degraded for a low-confidence match', async () => {
+        const presentation = buildMorphPresentation([
+          { shapes: [morphShape(1, 'Alpha', 0, 0)] },
+          { shapes: [morphShape(2, 'Beta', 0, 0)], transition: { effect: { kind: 'morph' } } },
+        ]);
+        const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+        const unsupportedFeatures = el.render(presentation);
+
+        expect(unsupportedFeatures.all).toContainEqual(
+          expect.objectContaining({ code: 'morph-match-degraded', slideIndex: 1 }),
+        );
+
+        const [outgoingSlide, incomingSlide] = slideEls(el);
+        el.next();
+
+        // Falls back to a plain whole-slide crossfade (#animateFade), not a per-shape morph tween.
+        expect(latestAnimation(outgoingSlide!)?.keyframes).toEqual([
+          { opacity: 1 },
+          { opacity: 0 },
+        ]);
+        expect(latestAnimation(incomingSlide!)?.keyframes).toEqual([
+          { opacity: 0 },
+          { opacity: 1 },
+        ]);
+        expect(incomingSlide?.classList.contains('pptx-slide--transitioning')).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(400);
+      });
+
+      it('reports morph-match-degraded for a morph transition on the very first slide', () => {
+        const presentation = buildMorphPresentation([
+          { shapes: [morphShape(1, 'Title 1', 0, 0)], transition: { effect: { kind: 'morph' } } },
+        ]);
+        const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+        const unsupportedFeatures = el.render(presentation);
+
+        expect(unsupportedFeatures.all).toContainEqual(
+          expect.objectContaining({ code: 'morph-match-degraded', slideIndex: 0 }),
+        );
+      });
+
+      it('reverses departing/arriving roles correctly for backward navigation', async () => {
+        const presentation = buildMorphPresentation([
+          { shapes: [morphShape(1, 'Title 1', 0, 0)] },
+          {
+            shapes: [morphShape(1, 'Title 1', 1000000, 1000000)],
+            transition: { effect: { kind: 'morph' } },
+          },
+        ]);
+        const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+        el.render(presentation);
+
+        const [slide0, slide1] = slideEls(el);
+        const shapeOnSlide0 = slide0!.querySelector<HTMLElement>('[data-pptx-shape-id="1"]')!;
+        const shapeOnSlide1 = slide1!.querySelector<HTMLElement>('[data-pptx-shape-id="1"]')!;
+
+        el.next();
+        await vi.advanceTimersByTimeAsync(400);
+        recordedAnimations = []; // isolate the backward navigation's own animate() calls
+
+        el.previous();
+
+        // Now slide1 (currently shown) is departing (hidden instantly) and slide0 (the target) is
+        // arriving (the one that moves, opaquely) — the opposite of the forward case, even though
+        // it's the exact same authored transition.
+        const departingAnim = latestAnimation(shapeOnSlide1);
+        expect(departingAnim?.keyframes).toEqual([{ opacity: 0 }]);
+        expect(departingAnim?.options).toMatchObject({ duration: 0 });
+
+        const arrivingKeyframes = latestAnimation(shapeOnSlide0)?.keyframes;
+        expect(arrivingKeyframes![0]).toMatchObject({ left: shapeOnSlide1.style.left });
+        expect(arrivingKeyframes![1]).toMatchObject({ left: shapeOnSlide0.style.left });
+
+        await vi.advanceTimersByTimeAsync(400);
+      });
+    });
+  });
+
+  describe('Slide.timing fade animations', () => {
+    // Only needs to record calls, not drive a `.finished` promise to resolution — unlike
+    // push/fade slide transitions (see above), #playSlideAnimations fires-and-forgets each
+    // Animation, so there's nothing to await here.
+    let recordedCalls: { target: HTMLElement; keyframes: Keyframe[]; options: unknown }[] = [];
+
+    beforeEach(() => {
+      recordedCalls = [];
+      HTMLElement.prototype.animate = vi.fn(function (
+        this: HTMLElement,
+        keyframes: Keyframe[] | PropertyIndexedKeyframes | null,
+        options?: number | KeyframeAnimationOptions,
+      ) {
+        recordedCalls.push({ target: this, keyframes: keyframes as Keyframe[], options });
+        return {} as Animation;
+      }) as typeof HTMLElement.prototype.animate;
+    });
+
+    afterEach(() => {
+      delete (HTMLElement.prototype as { animate?: unknown }).animate;
+    });
+
+    function shape(id: number): Shape {
+      return { kind: 'shape', nonVisual: { id, name: `Shape ${id}` }, properties: {} };
+    }
+
+    function buildPresentation(fadeShapeId: number, transition: 'in' | 'out' = 'in'): Presentation {
+      return {
+        slideSize: { width: 12192000, height: 6858000 },
+        slideMasters: [],
+        slides: [
+          {
+            commonSlideData: { shapeTree: [shape(fadeShapeId)] },
+            layout: LAYOUT,
+            timing: {
+              timeNodeTree: {
+                kind: 'animEffect',
+                common: { id: 0, duration: 500 },
+                target: { kind: 'shape', shapeId: fadeShapeId },
+                filter: 'fade',
+                transition,
+              },
+            },
+          },
+        ],
+        notesSlides: [],
+      };
+    }
+
+    it('plays a fade-in on the target shape as soon as its slide is shown', () => {
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      el.render(buildPresentation(42));
+
+      const target = el.shadowRoot?.querySelector<HTMLElement>('[data-pptx-shape-id="42"]');
+      expect(target).not.toBeNull();
+      const call = recordedCalls.find((c) => c.target === target);
+      expect(call).toBeDefined();
+      expect(call?.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
+      expect(call?.options).toMatchObject({ duration: 500, delay: 0, fill: 'forwards' });
+    });
+
+    it('plays a fade-out with reversed keyframes', () => {
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      el.render(buildPresentation(42, 'out'));
+
+      const target = el.shadowRoot?.querySelector<HTMLElement>('[data-pptx-shape-id="42"]');
+      const call = recordedCalls.find((c) => c.target === target);
+      expect(call?.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
+    });
+
+    it("replays a slide's fade animations each time it becomes active again", () => {
+      const base = buildPresentation(42);
+      const presentation: Presentation = {
+        ...base,
+        // A second, untimed slide to navigate to and back from.
+        slides: [...base.slides, { commonSlideData: { shapeTree: [] }, layout: LAYOUT }],
+      };
+      const el = document.createElement('pptx-presentation') as PptxPresentationElement;
+      el.render(presentation);
+
+      const target = el.shadowRoot?.querySelector<HTMLElement>('[data-pptx-shape-id="42"]');
+      const callsOnTarget = () => recordedCalls.filter((c) => c.target === target);
+      expect(callsOnTarget()).toHaveLength(1); // from the initial render
+
+      el.next();
+      el.previous();
+      expect(callsOnTarget()).toHaveLength(2); // replayed on re-entering slide 0
     });
   });
 });

@@ -1,0 +1,14 @@
+{
+  "name": "@pptx2html/pages",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "webpack --mode production",
+    "start": "webpack serve --mode development"
+  },
+  "dependencies": {
+    "@pptx2html/reader": "*",
+    "@pptx2html/to-html5": "*"
+  }
+}

@@ -1,4 +1,9 @@
-import type { Geometry, PresetGeometry } from '@pptx2html/presentation';
+import type {
+  CustomGeometryPath,
+  Geometry,
+  PathPoint,
+  PresetGeometry,
+} from '@pptx2html/presentation';
 
 /**
  * Preset shape outlines (§20.1.9.18, a:prstGeom), scoped to the common subset a real deck is
@@ -7,7 +12,8 @@ import type { Geometry, PresetGeometry } from '@pptx2html/presentation';
  * too: a plain `<div>` with CSS `border-radius` already draws them exactly, including a border
  * that correctly follows the rounded outline — see `nativeBorderRadius` below and its use in
  * `shape-tree.ts`. This module only covers shapes CSS genuinely can't express as a rectangle
- * (however rounded) with a `border`, where an SVG `<path>` overlay is the only option.
+ * (however rounded) with a `border`, where an SVG `<path>` overlay is the only option — which is
+ * also why freeform (`a:custGeom`) outlines live here too, see `customGeometryPath` below.
  *
  * Adjustment-guide handling is intentionally approximate: `packages/presentation`'s `ShapeGuide`
  * only preserves a guide's literal `val N` override (no formula evaluator — see its own doc
@@ -149,6 +155,106 @@ export function presetShapePath(geometry: Geometry): string | undefined {
     default:
       return undefined;
   }
+}
+
+/** A point in an `a:path`'s own local coordinate space, expressed as a percentage of that path's
+ * `w`/`h` — the same `0 0 100 100` space `presetShapePath` uses, so a `custGeom` outline stretches
+ * onto the shape's actual box the identical non-uniform way a preset one does. */
+function scalePoint(point: PathPoint, path: CustomGeometryPath): readonly [number, number] {
+  return [round((point.x / path.width) * 100), round((point.y / path.height) * 100)];
+}
+
+/**
+ * Renders one `a:path`'s commands as an SVG subpath (`M`/`L`/`Q`/`C`/`A`/`Z`), scaled into the
+ * `0 0 100 100` space via `scalePoint`. `arcTo` (§20.1.9.9) is the one command whose SVG
+ * translation isn't a direct 1:1 mapping: OOXML defines it as a portion of an ellipse (radii
+ * `wR`/`hR`) that the current pen position sits on at angle `stAng`, swinging `swAng` further —
+ * so the ellipse's centre and end point are derived here from the current pen position before
+ * being handed to SVG's own `A rx ry x-axis-rotation large-arc-flag sweep-flag x y` command
+ * (rotation is always 0: neither coordinate system rotates the ellipse relative to the path's own
+ * axes). Non-uniform axis scaling (a path whose `w` and `h` differ) maps an ellipse to another
+ * ellipse under this transform, so scaling the two radii independently by the same per-axis
+ * factor as any other point stays correct.
+ */
+function buildSubpathD(path: CustomGeometryPath): string {
+  let current: PathPoint = { x: 0, y: 0 };
+  const parts: string[] = [];
+  for (const command of path.commands) {
+    switch (command.type) {
+      case 'moveTo': {
+        const [x, y] = scalePoint(command.point, path);
+        parts.push(`M ${x} ${y}`);
+        current = command.point;
+        break;
+      }
+      case 'lnTo': {
+        const [x, y] = scalePoint(command.point, path);
+        parts.push(`L ${x} ${y}`);
+        current = command.point;
+        break;
+      }
+      case 'quadBezTo': {
+        const [cx, cy] = scalePoint(command.control, path);
+        const [x, y] = scalePoint(command.point, path);
+        parts.push(`Q ${cx} ${cy} ${x} ${y}`);
+        current = command.point;
+        break;
+      }
+      case 'cubicBezTo': {
+        const [c1x, c1y] = scalePoint(command.control1, path);
+        const [c2x, c2y] = scalePoint(command.control2, path);
+        const [x, y] = scalePoint(command.point, path);
+        parts.push(`C ${c1x} ${c1y} ${c2x} ${c2y} ${x} ${y}`);
+        current = command.point;
+        break;
+      }
+      case 'arcTo': {
+        const { widthRadius, heightRadius, startAngle, swingAngle } = command;
+        const startRad = (startAngle / 60000) * (Math.PI / 180);
+        const endRad = ((startAngle + swingAngle) / 60000) * (Math.PI / 180);
+        const centerX = current.x - widthRadius * Math.cos(startRad);
+        const centerY = current.y - heightRadius * Math.sin(startRad);
+        const endPoint: PathPoint = {
+          x: centerX + widthRadius * Math.cos(endRad),
+          y: centerY + heightRadius * Math.sin(endRad),
+        };
+        const rx = round((Math.abs(widthRadius) / path.width) * 100);
+        const ry = round((Math.abs(heightRadius) / path.height) * 100);
+        const [x, y] = scalePoint(endPoint, path);
+        const largeArcFlag = Math.abs(swingAngle) > 180 * 60000 ? 1 : 0;
+        const sweepFlag = swingAngle >= 0 ? 1 : 0;
+        parts.push(`A ${rx} ${ry} 0 ${largeArcFlag} ${sweepFlag} ${x} ${y}`);
+        current = endPoint;
+        break;
+      }
+      case 'close':
+        parts.push('Z');
+        break;
+    }
+  }
+  return parts.join(' ');
+}
+
+/**
+ * Renders a `custGeom`'s parsed path data (`packages/presentation`'s `CustomGeometry.pathLst`) as
+ * an SVG path's `d` attribute, in the same `0 0 100 100` non-uniformly-stretched space
+ * `presetShapePath` uses. Multiple `a:path` entries concatenate into multiple subpaths within one
+ * `d` string, which SVG's default nonzero fill rule renders as a hole wherever they overlap with
+ * opposite winding — exactly what a boolean "Subtract" shape (an outer outline plus an inner
+ * cutout, PowerPoint's own `custGeom` output for Merge Shapes operations) needs, with no separate
+ * fill-rule handling required. Returns `undefined` when `geometry` carries no usable path data at
+ * all (either genuinely absent, or every `a:path` was dropped by the reader — see
+ * `CustomGeometryPath`'s own doc comment) or every path present has a zero `w`/`h` (nothing to
+ * scale against) — the caller falls back to a plain rectangle in that case, same as an unmodeled
+ * preset.
+ */
+export function customGeometryPath(geometry: Geometry): string | undefined {
+  if (geometry.type !== 'custom' || !geometry.pathLst) return undefined;
+  const subpaths = geometry.pathLst
+    .filter((path) => path.width > 0 && path.height > 0)
+    .map(buildSubpathD)
+    .filter((d) => d.length > 0);
+  return subpaths.length > 0 ? subpaths.join(' ') : undefined;
 }
 
 /** Spec's commonly-cited default `roundRect` corner radius: 1/6 of the shorter side. Not

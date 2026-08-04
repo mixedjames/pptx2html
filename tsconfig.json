@@ -5,6 +5,7 @@
     { "path": "packages/presentation" },
     { "path": "packages/reader" },
     { "path": "packages/to-html5" },
-    { "path": "apps/web-demo" }
+    { "path": "apps/web-demo" },
+    { "path": "apps/pages" }
   ]
 }

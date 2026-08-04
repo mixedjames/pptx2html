@@ -2,6 +2,7 @@ import type {
   CornerDirection,
   EightDirection,
   InOutDirection,
+  MorphOption,
   SideDirection,
   SlideTransition,
   TransitionEffect,
@@ -41,6 +42,7 @@ const EMPTY_KINDS = new Set([
 ]);
 const EIGHT_DIRECTION_KINDS = new Set(['cover', 'pull']);
 const SIDE_DIRECTION_KINDS = new Set(['push', 'wipe']);
+const MORPH_OPTIONS = new Set<MorphOption>(['byObject', 'byWord', 'byChar']);
 
 /**
  * Parses one member of §19.3.1.49's `EG_SlideTransition` choice group — the effect element that,
@@ -102,6 +104,10 @@ function parseTransitionEffect(node: XmlNode | undefined): TransitionEffect | un
     const direction = parseEnum<InOutDirection>(attr(node, 'dir'), IN_OUT_DIRECTIONS);
     return { kind: 'zoom', ...(direction ? { direction } : {}) };
   }
+  if (kind === 'morph') {
+    const option = parseEnum<MorphOption>(attr(node, 'option'), MORPH_OPTIONS);
+    return { kind: 'morph', ...(option ? { option } : {}) };
+  }
   return undefined;
 }
 
@@ -130,6 +136,26 @@ function findEffectNode(transitionNode: XmlNode): XmlNode | undefined {
   return children(transitionNode).find((child) => localName(child) !== 'sndAc');
 }
 
+/**
+ * Given both branches an `mc:AlternateContent`-wrapped `p:transition` might offer (see
+ * `xml/query.ts`'s `findAlternateContentChild`), decides which whole `<p:transition>` element to
+ * actually parse: the `mc:Choice` branch's own version, but *only* when its own effect content is
+ * one this reader recognizes (currently just `p159:morph`) — an extension effect we don't
+ * understand yet falls back to the `mc:Fallback` branch's schema-legal effect (usually a plain
+ * fade or push) instead of silently losing the transition altogether, since PowerPoint always
+ * writes a compatible fallback for exactly this reason. A `p:transition` with no
+ * `mc:AlternateContent` wrapper at all only ever has `resolved` set, so this always returns that.
+ */
+export function pickTransitionNode(lookup: {
+  readonly choice?: XmlNode;
+  readonly resolved?: XmlNode;
+}): XmlNode | undefined {
+  if (lookup.choice && parseTransitionEffect(findEffectNode(lookup.choice))) {
+    return lookup.choice;
+  }
+  return lookup.resolved;
+}
+
 /** Parses a slide's p:transition (§19.3.1.49): how it's shown when the presentation advances to it. */
 export function parseSlideTransition(
   transitionNode: XmlNode | undefined,
@@ -138,6 +164,7 @@ export function parseSlideTransition(
   if (!transitionNode) return undefined;
 
   const speed = parseEnum<TransitionSpeed>(attr(transitionNode, 'spd'), SPEEDS);
+  const durationMs = parseIntAttr(attr(transitionNode, 'p14:dur'));
   const advanceOnClick = parseBoolean(attr(transitionNode, 'advClick'));
   const advanceAfter = parseIntAttr(attr(transitionNode, 'advTm'));
   const effect = parseTransitionEffect(findEffectNode(transitionNode));
@@ -145,6 +172,7 @@ export function parseSlideTransition(
 
   if (
     speed === undefined &&
+    durationMs === undefined &&
     advanceOnClick === undefined &&
     advanceAfter === undefined &&
     effect === undefined &&
@@ -155,6 +183,7 @@ export function parseSlideTransition(
 
   return {
     ...(speed ? { speed } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
     ...(advanceOnClick !== undefined ? { advanceOnClick } : {}),
     ...(advanceAfter !== undefined ? { advanceAfter } : {}),
     ...(effect ? { effect } : {}),

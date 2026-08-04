@@ -29,7 +29,7 @@ import {
 
 import { applyFill, applyLine, applySvgFill, applySvgLine } from './fill.js';
 import type { RenderContext } from './render-context.js';
-import { nativeBorderRadius, presetShapePath } from './shape-geometry.js';
+import { customGeometryPath, nativeBorderRadius, presetShapePath } from './shape-geometry.js';
 import { renderTable } from './table.js';
 import { renderTextBody } from './text.js';
 
@@ -174,8 +174,24 @@ function renderShape(
   const fill = effectiveFill(shape.properties, shape.style, formatScheme);
   const line = effectiveLine(shape.properties, shape.style, formatScheme);
   const geometry = shape.properties.geometry;
-  const outlinePath = geometry && presetShapePath(geometry);
+  const outlinePath = geometry && (presetShapePath(geometry) ?? customGeometryPath(geometry));
   if (outlinePath) {
+    // applySvgFill/applySvgLine (via renderShapeOutline) only paint a solid fill/stroke on this
+    // path — a gradient/pattern/blip fill or non-solid outline colour is silently dropped there.
+    if (fill && fill.type !== 'none' && fill.type !== 'solid') {
+      context.reportUnsupported?.(
+        'svg-preset-fill-unmodeled',
+        `A "${fill.type}" fill is not rendered on this preset's outline; it renders unfilled instead.`,
+        shape.nonVisual,
+      );
+    }
+    if (line?.fill && line.fill.type !== 'none' && line.fill.type !== 'solid') {
+      context.reportUnsupported?.(
+        'svg-preset-line-unmodeled',
+        `A "${line.fill.type}" outline colour is not rendered on this preset's outline; it falls back to the default colour.`,
+        shape.nonVisual,
+      );
+    }
     el.appendChild(
       renderShapeOutline(doc, outlinePath, fill, line, scheme, context.slideSize.width),
     );
@@ -206,7 +222,14 @@ function renderShape(
     el.style.flexDirection = 'column';
     el.style.justifyContent = justifyContentForAnchor(anchor);
     el.appendChild(
-      renderTextBody(doc, shape.textBody, shape.nonVisual.placeholder, context, shape.style),
+      renderTextBody(
+        doc,
+        shape.textBody,
+        shape.nonVisual.placeholder,
+        context,
+        shape.style,
+        shape.nonVisual,
+      ),
     );
   }
   return el;
@@ -234,8 +257,19 @@ function renderPicture(
   // not yet handled here — clipping an <img> to an arbitrary SVG path needs an <svg><image> +
   // <clipPath> overlay, not the plain border-radius this native subset gets for free; deliberately
   // deferred (rect/roundRect/ellipse covers the overwhelming majority of real picture crops).
-  const radius = picture.properties.geometry && nativeBorderRadius(picture.properties.geometry);
-  if (radius) el.style.borderRadius = radius;
+  const geometry = picture.properties.geometry;
+  const radius = geometry && nativeBorderRadius(geometry);
+  if (radius) {
+    el.style.borderRadius = radius;
+  } else if (geometry && !(geometry.type === 'preset' && geometry.preset === 'rect')) {
+    context.reportUnsupported?.(
+      'picture-crop-unmodeled',
+      geometry.type === 'custom'
+        ? 'Custom geometry (a:custGeom) crop is not applied to this picture.'
+        : `Preset geometry "${geometry.preset}" crop is not applied to this picture.`,
+      picture.nonVisual,
+    );
+  }
   // Shows through any transparent pixels in the image itself (e.g. a transparent PNG over a
   // colored spPr fill) — same fill/line properties a shape carries, since Picture shares
   // ShapeProperties.
@@ -260,6 +294,14 @@ function renderConnector(
     context.layout,
   );
   if (transform) positionElement(el, map, transform, context);
+  // No line is ever drawn for a connector — its visible line isn't its bounding box's border (a
+  // straight connector runs the box's diagonal, bent/curved ones need real path geometry, both
+  // unmodeled), so unlike renderShape/renderPicture this doesn't even resolve spPr/style fill/line.
+  context.reportUnsupported?.(
+    'connector-line-unmodeled',
+    'Connector lines are not rendered.',
+    connector.nonVisual,
+  );
   return el;
 }
 
@@ -276,7 +318,7 @@ function renderGraphicFrame(
   positionElement(el, map, frame.transform, context);
 
   if (frame.graphic.type === 'table') {
-    el.appendChild(renderTable(doc, frame.graphic, context));
+    el.appendChild(renderTable(doc, frame.graphic, context, frame.nonVisual));
   } else {
     context.reportUnsupported?.(
       'graphic-placeholder-unmodeled',
@@ -321,6 +363,20 @@ function renderGroup(
 }
 
 export function renderShapeTreeNode(
+  doc: Document,
+  node: ShapeTreeNode,
+  map: CoordinateMap,
+  context: RenderContext,
+): HTMLElement {
+  const el = renderShapeTreeNodeElement(doc, node, map, context);
+  // Lets animation.ts's collectFadeAnimations target this element later by the same shape id an
+  // AnimationTarget refers to (§19.7.13's shapeId) — every ShapeTreeNode kind, including a group,
+  // carries a nonVisual identity an animation can address.
+  el.dataset.pptxShapeId = String(node.nonVisual.id);
+  return el;
+}
+
+function renderShapeTreeNodeElement(
   doc: Document,
   node: ShapeTreeNode,
   map: CoordinateMap,

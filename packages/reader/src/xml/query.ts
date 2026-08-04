@@ -73,6 +73,40 @@ export function findChild(node: XmlNode, name: string): XmlNode | undefined {
   return children(node).find((child) => localName(child) === name);
 }
 
+/**
+ * Like `findChild`, but for a child that might be `mc:AlternateContent`-wrapped: returns the
+ * `mc:Choice` branch's own version of `name` *alongside* whatever `children()`/`findChild()`
+ * would already give you (the `mc:Fallback` branch's version, or the plain unwrapped child if
+ * there's no `mc:AlternateContent` at all) — `resolved` and `choice` are the same node when
+ * there's a `Choice` but no `Fallback`, mirroring `children()`'s own "falls back to `mc:Choice`
+ * when no `mc:Fallback` is present" behaviour. For a caller that wants to recognize specific
+ * extension content in the `Choice` branch itself (e.g. `p159:morph`) and only fall back to the
+ * schema-compatible baseline when it doesn't — `children()`/`findChild()` can never expose the
+ * `Choice` branch at all (see their own doc comment), since they're built for callers that don't
+ * care about the difference. We still never evaluate `mc:Choice`'s `Requires` attribute.
+ */
+export function findAlternateContentChild(
+  node: XmlNode,
+  name: string,
+): { readonly choice?: XmlNode; readonly resolved?: XmlNode } {
+  for (const child of rawChildren(node)) {
+    if (isTextNode(child)) continue;
+    if (localName(child) === 'AlternateContent') {
+      const choiceWrapper = findChild(child, 'Choice');
+      const fallbackWrapper = findChild(child, 'Fallback');
+      const resolvedWrapper = fallbackWrapper ?? choiceWrapper;
+      const choice = choiceWrapper ? findChild(choiceWrapper, name) : undefined;
+      const resolved = resolvedWrapper ? findChild(resolvedWrapper, name) : undefined;
+      if (choice ?? resolved) {
+        return { ...(choice ? { choice } : {}), ...(resolved ? { resolved } : {}) };
+      }
+      continue;
+    }
+    if (localName(child) === name) return { resolved: child };
+  }
+  return {};
+}
+
 export function findAllChildren(node: XmlNode, name: string): readonly XmlNode[] {
   return children(node).filter((child) => localName(child) === name);
 }

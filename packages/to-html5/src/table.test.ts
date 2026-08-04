@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import type { Table } from '@pptx2html/presentation';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { RenderContext } from './render-context.js';
 import { renderTable } from './table.js';
 
@@ -50,5 +50,56 @@ describe('renderTable', () => {
     expect((rows[0]?.querySelector('td') as HTMLTableCellElement).colSpan).toBe(2);
     expect(rows[1]?.querySelectorAll('td')).toHaveLength(2);
     expect(rows[1]?.textContent).toBe('BC');
+  });
+
+  it('reports unrendered cell fills once, counting merged cells out, with the graphicFrame shape ref', () => {
+    const reportUnsupported = vi.fn();
+    const table: Table = {
+      type: 'table',
+      columns: [{ width: 1 }],
+      rows: [
+        {
+          height: 1,
+          cells: [
+            {
+              textBody: { paragraphs: [] },
+              fill: { type: 'solid', color: { type: 'srgb', value: 'FF0000' } },
+            },
+          ],
+        },
+        {
+          height: 1,
+          cells: [
+            {
+              textBody: { paragraphs: [] },
+              fill: { type: 'solid', color: { type: 'srgb', value: '00FF00' } },
+              merged: true,
+            },
+          ],
+        },
+      ],
+    };
+
+    renderTable(document, table, { ...CONTEXT, reportUnsupported }, { id: 1, name: 'Table 1' });
+
+    expect(reportUnsupported).toHaveBeenCalledWith(
+      'table-cell-fill-unmodeled',
+      expect.stringContaining('1'),
+      { id: 1, name: 'Table 1' },
+    );
+    expect(reportUnsupported).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not report when no cell has a fill', () => {
+    const reportUnsupported = vi.fn();
+    const table: Table = {
+      type: 'table',
+      columns: [{ width: 1 }],
+      rows: [{ height: 1, cells: [{ textBody: { paragraphs: [] } }] }],
+    };
+
+    renderTable(document, table, { ...CONTEXT, reportUnsupported });
+
+    expect(reportUnsupported).not.toHaveBeenCalled();
   });
 });

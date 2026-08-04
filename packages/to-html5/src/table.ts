@@ -1,10 +1,26 @@
 import type { Table } from '@pptx2html/presentation';
 import type { RenderContext } from './render-context.js';
 import { renderTextBody } from './text.js';
+import type { UnsupportedFeatureShapeRef } from './unsupported-features.js';
 
-export function renderTable(doc: Document, table: Table, context: RenderContext): HTMLElement {
+export function renderTable(
+  doc: Document,
+  table: Table,
+  context: RenderContext,
+  shapeRef?: UnsupportedFeatureShapeRef,
+): HTMLElement {
   const el = doc.createElement('table');
   el.className = 'pptx-table';
+  const cellsWithFill = table.rows
+    .flatMap((row) => row.cells)
+    .filter((cell) => cell.fill && !cell.merged).length;
+  if (cellsWithFill > 0) {
+    context.reportUnsupported?.(
+      'table-cell-fill-unmodeled',
+      `${cellsWithFill} table cell fill(s) are not rendered.`,
+      shapeRef,
+    );
+  }
   // Fills its containing graphicFrame div (itself sized as a percentage of the slide, see
   // shape-tree.ts), so the table scales along with everything else. table-layout: fixed makes
   // the percentage <col> widths below actually control column sizing instead of being
@@ -38,7 +54,7 @@ export function renderTable(doc: Document, table: Table, context: RenderContext)
       // Table cells never carry a placeholder identity of their own (no nvPr/ph in the schema
       // for a:tc), so cell text only falls back through the master's otherStyle/presentation
       // default, not any placeholder-specific list style.
-      td.appendChild(renderTextBody(doc, cell.textBody, undefined, context));
+      td.appendChild(renderTextBody(doc, cell.textBody, undefined, context, undefined, shapeRef));
       tr.appendChild(td);
     }
     tbody.appendChild(tr);

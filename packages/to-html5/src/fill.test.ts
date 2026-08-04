@@ -251,4 +251,16 @@ describe('applySvgLine', () => {
     applySvgLine(path, { width: 12700, dashStyle: 'solid' }, undefined, SLIDE_WIDTH);
     expect(path.style.strokeDasharray).toBe('');
   });
+
+  it('sets vector-effect: non-scaling-stroke so the stroke renders uniformly on a non-uniformly-scaled path', () => {
+    const path = svgPath();
+    applySvgLine(path, { width: 12700 }, undefined, SLIDE_WIDTH);
+    expect(path.getAttribute('vector-effect')).toBe('non-scaling-stroke');
+  });
+
+  it('does not set vector-effect when there is no stroke to draw', () => {
+    const path = svgPath();
+    applySvgLine(path, { width: 12700, fill: { type: 'none' } }, undefined, SLIDE_WIDTH);
+    expect(path.getAttribute('vector-effect')).toBeNull();
+  });
 });

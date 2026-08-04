@@ -1,8 +1,17 @@
-import type { Geometry, Point2D, ShapeGuide, Size2D, Transform2D } from '@pptx2html/presentation';
+import type {
+  CustomGeometryPath,
+  Geometry,
+  PathCommand,
+  PathPoint,
+  Point2D,
+  ShapeGuide,
+  Size2D,
+  Transform2D,
+} from '@pptx2html/presentation';
 
 import type { XmlNode } from '../xml/parse.js';
-import { attr, children, findChild, localName } from '../xml/query.js';
-import { parseAngle, parseBoolean, parseEmu } from './units.js';
+import { attr, children, findAllChildren, findChild, localName } from '../xml/query.js';
+import { parseAngle, parseBoolean, parseEmu, parseIntAttr } from './units.js';
 
 function parsePoint(node: XmlNode | undefined): Point2D | undefined {
   if (!node) return undefined;
@@ -62,6 +71,85 @@ function parseAdjustValues(node: XmlNode): readonly ShapeGuide[] | undefined {
   return guides.length > 0 ? guides : undefined;
 }
 
+/** An `a:*` command node's `a:pt` children's `x`/`y`, in document order. Returns `[]` if any
+ * `pt`'s coordinate isn't a plain literal integer (e.g. a `gdLst` guide-name reference) — the
+ * caller treats that as "this command can't be represented", not "this command has no points". */
+function parsePoints(node: XmlNode): readonly PathPoint[] {
+  const points: PathPoint[] = [];
+  for (const ptNode of findAllChildren(node, 'pt')) {
+    const x = parseIntAttr(attr(ptNode, 'x'));
+    const y = parseIntAttr(attr(ptNode, 'y'));
+    if (x === undefined || y === undefined) return [];
+    points.push({ x, y });
+  }
+  return points;
+}
+
+/**
+ * Parses one outline-drawing command within an `a:path` (§20.1.9.2–9.9). Returns `undefined` for
+ * a command this package doesn't model, or one whose points/attributes didn't fully resolve to
+ * literal numbers (a `gdLst`-guide-referenced coordinate — see `CustomGeometryPath`'s own doc
+ * comment) — the caller drops the whole enclosing path rather than render a corrupted outline.
+ */
+function parsePathCommand(node: XmlNode): PathCommand | undefined {
+  switch (localName(node)) {
+    case 'moveTo': {
+      const points = parsePoints(node);
+      return points.length === 1 ? { type: 'moveTo', point: points[0]! } : undefined;
+    }
+    case 'lnTo': {
+      const points = parsePoints(node);
+      return points.length === 1 ? { type: 'lnTo', point: points[0]! } : undefined;
+    }
+    case 'quadBezTo': {
+      const points = parsePoints(node);
+      return points.length === 2
+        ? { type: 'quadBezTo', control: points[0]!, point: points[1]! }
+        : undefined;
+    }
+    case 'cubicBezTo': {
+      const points = parsePoints(node);
+      return points.length === 3
+        ? { type: 'cubicBezTo', control1: points[0]!, control2: points[1]!, point: points[2]! }
+        : undefined;
+    }
+    case 'arcTo': {
+      const widthRadius = parseIntAttr(attr(node, 'wR'));
+      const heightRadius = parseIntAttr(attr(node, 'hR'));
+      const startAngle = parseAngle(attr(node, 'stAng'));
+      const swingAngle = parseAngle(attr(node, 'swAng'));
+      return widthRadius !== undefined &&
+        heightRadius !== undefined &&
+        startAngle !== undefined &&
+        swingAngle !== undefined
+        ? { type: 'arcTo', widthRadius, heightRadius, startAngle, swingAngle }
+        : undefined;
+    }
+    case 'close':
+      return { type: 'close' };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Parses one `a:path` within a `custGeom`'s `pathLst`. Returns `undefined` if `w`/`h` are missing
+ * or any command within it didn't fully resolve (see `parsePathCommand`) — dropped by the caller
+ * rather than folded in as a partial/corrupt outline.
+ */
+function parsePath(node: XmlNode): CustomGeometryPath | undefined {
+  const width = parseIntAttr(attr(node, 'w'));
+  const height = parseIntAttr(attr(node, 'h'));
+  if (width === undefined || height === undefined) return undefined;
+  const commands: PathCommand[] = [];
+  for (const child of children(node)) {
+    const command = parsePathCommand(child);
+    if (!command) return undefined;
+    commands.push(command);
+  }
+  return commands.length > 0 ? { width, height, commands } : undefined;
+}
+
 /** Parses a shape's outline geometry: a:prstGeom (§20.1.9.18) or a:custGeom (§20.1.9.8). */
 export function parseGeometry(node: XmlNode | undefined): Geometry | undefined {
   if (!node) return undefined;
@@ -72,8 +160,15 @@ export function parseGeometry(node: XmlNode | undefined): Geometry | undefined {
       const adjustValues = parseAdjustValues(node);
       return { type: 'preset', preset, ...(adjustValues ? { adjustValues } : {}) };
     }
-    case 'custGeom':
-      return { type: 'custom' };
+    case 'custGeom': {
+      const pathLstNode = findChild(node, 'pathLst');
+      const pathLst = pathLstNode
+        ? findAllChildren(pathLstNode, 'path')
+            .map(parsePath)
+            .filter((path): path is CustomGeometryPath => path !== undefined)
+        : [];
+      return pathLst.length > 0 ? { type: 'custom', pathLst } : { type: 'custom' };
+    }
     default:
       return undefined;
   }

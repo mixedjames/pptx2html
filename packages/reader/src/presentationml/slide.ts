@@ -4,11 +4,11 @@ import { createMediaResolver } from '../drawingml/media.js';
 import { parseBoolean } from '../drawingml/units.js';
 import type { ReaderContext } from '../reader-context.js';
 import { parseXml } from '../xml/parse.js';
-import { attr, findRoot, findChild } from '../xml/query.js';
+import { attr, findAlternateContentChild, findChild, findRoot } from '../xml/query.js';
 import { parseSlideTiming } from './animation.js';
 import { EMPTY_COMMON_SLIDE_DATA, parseCommonSlideData } from './common-slide-data.js';
 import { RELATIONSHIP_TYPES } from './relationship-types.js';
-import { parseSlideTransition } from './transition.js';
+import { parseSlideTransition, pickTransitionNode } from './transition.js';
 
 /**
  * Parses a slide part (§19.3.1.38, p:sld). Requires that `readSlideMaster` has already been
@@ -32,8 +32,12 @@ export function readSlide(context: ReaderContext, partName: string): Slide {
   }
 
   const showMasterShapes = root ? parseBoolean(attr(root, 'showMasterSp')) : undefined;
+  // A p:transition authored via a "fancy" p14/p15/p159 extension (Morph, ...) is wrapped in
+  // mc:AlternateContent alongside a schema-legal fallback effect — findAlternateContentChild
+  // surfaces both branches so pickTransitionNode can prefer the richer one whenever it recognizes
+  // its content, rather than always taking the Fallback the way a plain findChild would.
   const transition = parseSlideTransition(
-    root ? findChild(root, 'transition') : undefined,
+    root ? pickTransitionNode(findAlternateContentChild(root, 'transition')) : undefined,
     resolveMedia,
   );
   const timing = parseSlideTiming(root ? findChild(root, 'timing') : undefined);
