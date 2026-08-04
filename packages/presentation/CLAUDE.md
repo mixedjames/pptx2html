@@ -77,7 +77,11 @@ groups same-named leaves, and pairs them: `id` first (unique within a slide, so 
 signal than name alone whenever a same-named duplicate exists on both sides), then positionally as a
 last-resort tiebreak for anything still unpaired. A blank name (`""`) never matches anything, and
 matching is global across the whole flattened tree — a shape moving in or out of a group between
-the two slides still matches. Returns `{ matched, disappearing, appearing }`: matched pairs should
+the two slides still matches. Whatever the name pass leaves unpaired gets a second pass keyed on
+plain text content instead (`groupByText`) — a text box authored fresh on each slide (typed
+independently rather than produced by duplicating an existing shape) never shares a name across the
+two slides even though it's visibly the same object, and PowerPoint's own Morph does match that
+case; same `id`/positional tiebreak rules apply within this pass too. Returns `{ matched, disappearing, appearing }`: matched pairs should
 morph, `disappearing` (unmatched outgoing) should fade out, `appearing` (unmatched incoming) should
 fade in. This is a genuinely undocumented algorithm PowerPoint itself doesn't publish beyond "match
 by name" — the `id`/positional tiebreaks are this package's own best-effort approximation, same tier

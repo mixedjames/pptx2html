@@ -8,7 +8,7 @@ import type { SlideLayout } from './slide-layout.js';
  * placeholders use `titleStyle`, other placeholder shapes (body, subtitle, etc.) use `bodyStyle`,
  * and non-placeholder shapes fall back to `otherStyle`. Each is a per-outline-level default, one
  * rung below a placeholder shape's own `TextBody.listStyle` in the inheritance chain — see
- * `to-html5`'s `text-style.ts`.
+ * `resolve/text-style.ts`.
  */
 export interface TextStyles {
   readonly titleStyle?: TextListStyle;

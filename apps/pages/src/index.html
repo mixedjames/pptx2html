@@ -5,43 +5,176 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>pptx2html — Presentation Gallery</title>
     <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+      }
+
       body {
         font-family:
           system-ui,
           -apple-system,
           sans-serif;
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 1rem;
+        color: #1a1a1a;
+        background: #fff;
       }
-      .controls {
+
+      .view {
+        min-height: 100dvh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      .view[hidden] {
+        display: none;
+      }
+
+      .view-header {
+        position: sticky;
+        top: 0;
         display: flex;
         align-items: center;
         gap: 0.5rem;
-        margin-bottom: 0.5rem;
+        padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem 0.75rem;
+        border-bottom: 1px solid #e0e0e0;
+        background: #fff;
+        z-index: 1;
       }
-      .error-log {
-        border: 1px solid #d9822b;
-        background: #fff8ef;
-        border-radius: 4px;
-        padding: 0.5rem 1rem;
-        margin: 1rem 0;
+
+      .view-header h1 {
+        flex: 1;
+        margin: 0;
+        font-size: 1.1rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
       }
+
+      .icon-button {
+        min-width: 2.75rem;
+        min-height: 2.75rem;
+        border: 1px solid #d0d0d0;
+        border-radius: 6px;
+        background: #fafafa;
+        font-size: 1.1rem;
+        line-height: 1;
+        cursor: pointer;
+        position: relative;
+      }
+
+      .icon-button:active {
+        background: #eee;
+      }
+
+      .badge {
+        position: absolute;
+        top: -0.4rem;
+        right: -0.4rem;
+        min-width: 1.25rem;
+        height: 1.25rem;
+        padding: 0 0.25rem;
+        border-radius: 999px;
+        background: #d9822b;
+        color: #fff;
+        font-size: 0.7rem;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .badge[hidden] {
+        display: none;
+      }
+
+      .view-body {
+        flex: 1;
+        padding: 0.75rem calc(0.75rem + env(safe-area-inset-right)) calc(
+            0.75rem + env(safe-area-inset-bottom)
+          )
+          calc(0.75rem + env(safe-area-inset-left));
+        overflow-y: auto;
+      }
+
+      #view-chooser .view-body {
+        max-width: 640px;
+        margin: 0 auto;
+        width: 100%;
+      }
+
+      #view-chooser h1 {
+        font-size: 1.4rem;
+      }
+
+      #view-chooser p.intro {
+        color: #555;
+      }
+
+      .demo-list {
+        list-style: none;
+        margin: 1rem 0 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .demo-button {
+        width: 100%;
+        min-height: 3rem;
+        padding: 0.75rem 1rem;
+        border: 1px solid #d0d0d0;
+        border-radius: 8px;
+        background: #fafafa;
+        font-size: 1rem;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .demo-button:active {
+        background: #eee;
+      }
+
+      .empty-state {
+        color: #777;
+      }
+
+      #status {
+        margin: 0 0 0.5rem;
+        color: #555;
+        font-size: 0.9rem;
+      }
+
+      .presentation-container {
+        max-width: 960px;
+        margin: 0 auto;
+      }
+
       .error-log h2 {
         margin: 0.5rem 0;
         font-size: 1rem;
       }
+
       .error-log details {
         margin-bottom: 0.5rem;
       }
+
       .error-log summary {
         cursor: pointer;
         font-weight: 600;
+        padding: 0.5rem 0;
       }
+
       .error-log ul {
         margin: 0.25rem 0 0.5rem 1.25rem;
         padding: 0;
       }
+
       .error-log li {
         font-size: 0.9rem;
         margin-bottom: 0.25rem;
@@ -50,18 +183,39 @@
   </head>
   <body>
     <div id="app">
-      <h1>pptx2html — Presentation Gallery</h1>
-      <p>
-        Pick a presentation below. Once it's loaded, click it or use the arrow keys to advance
-        through its slides.
-      </p>
-      <div class="controls">
-        <label for="demo-select">Presentation:</label>
-        <select id="demo-select"></select>
-      </div>
-      <p id="status"></p>
-      <div id="error-log" class="error-log" hidden></div>
-      <div id="output"></div>
+      <section id="view-chooser" class="view">
+        <div class="view-body">
+          <h1>pptx2html — Presentation Gallery</h1>
+          <p class="intro">Pick a presentation to view it.</p>
+          <ul id="demo-list" class="demo-list"></ul>
+        </div>
+      </section>
+
+      <section id="view-presentation" class="view" hidden>
+        <header class="view-header">
+          <button id="back-to-chooser" class="icon-button" aria-label="Back to list">←</button>
+          <h1 id="presentation-title"></h1>
+          <button id="open-error-log" class="icon-button" aria-label="View error log">
+            ⚠<span id="error-log-badge" class="badge" hidden>0</span>
+          </button>
+        </header>
+        <div class="view-body">
+          <p id="status"></p>
+          <div id="output" class="presentation-container"></div>
+        </div>
+      </section>
+
+      <section id="view-log" class="view" hidden>
+        <header class="view-header">
+          <button id="back-to-presentation" class="icon-button" aria-label="Back to presentation">
+            ←
+          </button>
+          <h1>Error log</h1>
+        </header>
+        <div class="view-body">
+          <div id="error-log-content" class="error-log"></div>
+        </div>
+      </section>
     </div>
   </body>
 </html>

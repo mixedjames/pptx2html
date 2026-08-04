@@ -2,15 +2,12 @@ import type { Presentation } from '@pptx2html/presentation';
 import { PptxPresentationElement, definePresentationElement } from './presentation-element.js';
 import { UnsupportedFeatureCollector } from './unsupported-features.js';
 
-export { resolveColor, resolveFillColor } from './color.js';
-export { applyFill, applyLine, resolveGradientCss } from './fill.js';
-export { PptxPresentationElement, definePresentationElement } from './presentation-element.js';
-export type { RenderContext } from './render-context.js';
-export { renderShapeTreeNode } from './shape-tree.js';
-export { renderSlide } from './slide.js';
-export { renderTable } from './table.js';
-export { renderTextBody } from './text.js';
-export { EMU_PER_PT, EMU_PER_PX, emuToCqw, emuToPx, fontSizeToEmu } from './units.js';
+// Public API is `renderPresentation` below, plus the types needed to use its return value —
+// everything else in this package (fill/color/text/shape-tree/slide rendering, unit conversion)
+// is an internal implementation detail, not exported. `PptxPresentationElement` and
+// `UnsupportedFeature`/`UnsupportedFeatureShapeRef` are exported only because they're part of
+// `renderPresentation`'s own return type, not as separately-intended entry points.
+export { PptxPresentationElement } from './presentation-element.js';
 export type { UnsupportedFeature, UnsupportedFeatureShapeRef } from './unsupported-features.js';
 export { UnsupportedFeatureCollector } from './unsupported-features.js';
 

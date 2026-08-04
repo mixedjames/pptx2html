@@ -98,7 +98,7 @@ export interface ParagraphProperties {
    * Default run formatting for this paragraph (a:pPr's defRPr child) — falls back for any run
    * in the paragraph that doesn't specify a given field itself. Distinct from `TextListStyle`,
    * which supplies the *paragraph's own* per-level default before this one is layered on top;
-   * see `to-html5`'s `text-style.ts` for the full run-property inheritance chain.
+   * see `resolve/text-style.ts` for the full run-property inheritance chain.
    */
   readonly defaultRunProperties?: RunProperties;
   readonly bullet?: Bullet;
