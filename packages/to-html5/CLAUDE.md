@@ -63,6 +63,17 @@ shape plays automatically, via the Web Animations API, as soon as its slide beco
 other `animEffect` filter, and implicit paragraph/graphic builds are still unconsumed and reported
 as unsupported. See root `CLAUDE.md`'s Todos for the remaining scope.
 
+**Scroll-driven playback (new) is also implemented now**, as a second, separate custom element —
+`<pptx-scroll-presentation>` (`scroll-presentation-element.ts`, `renderScrollPresentation`) —
+alongside the click-driven `<pptx-presentation>` above, not a mode on it. Every slide transition and
+build animation this package already knows how to play is positioned on one scrubbable
+absolute-millisecond timeline (`scroll-timeline.ts`'s `resolveScrollTimeline`) instead of being
+fired-and-forgotten in real time; scrolling a track inside the element's own shadow DOM sets each
+`Animation`'s `currentTime` directly. See "Key design decision: scroll-driven playback" below for
+the full mechanism, and `docs/scroll-driven-playback.md` for how this differs from that document's
+original framing (notably: no "is this deck fully time-resolved" gate at all — see that design
+decision for why).
+
 ## Layout
 
 **Note**: the OOXML inheritance-walking logic this section used to describe here —
@@ -243,8 +254,21 @@ non-scaling-stroke`" below); gradient/pattern/blip fills and a
   it walks past (other filters, non-shape targets, every other behavior kind, an `'indefinite'`
   duration, an unconsumed `buildList`) via its `report` callback — see "Key design decision:
   `Slide.timing` fade animations" below for what's approximated and why.
-- `index.ts` — barrel + `renderPresentation`, which registers the element and returns one
-  instance with `.render()` already called.
+- `transition-keyframes.ts` — pure keyframe/transform helpers factored out of
+  `presentation-element.ts` (`offscreenTransform`, `IDENTITY_TRANSFORM`, `REVERSE_SIDE_DIRECTION`,
+  `morphKeyframes`, `readShapeBox`, `findShapeElement`) so both it and `scroll-presentation-
+element.ts` produce pixel-identical `push`/`fade`/`morph` visuals from one source. Nothing here
+  mutates the DOM (`findShapeElement`/`readShapeBox` only read), which is what makes reuse from a
+  scrubbed (not just fire-and-forget) player possible.
+- `scroll-timeline.ts` — pure logic, no DOM: `resolveScrollTimeline` assembles a whole
+  `Presentation` into one absolute-millisecond `ScrollTimeline` (a `ScrollSegment` per slide, each
+  with an optional `transition` window and a `content` window) for `scroll-presentation-element.ts`
+  to scrub through — see "Key design decision: scroll-driven playback" below for the full
+  mechanism, in particular why this needed no new resolvers in `@pptx2html/presentation` at all.
+- `scroll-presentation-element.ts` — `PptxScrollPresentationElement`, the `<pptx-scroll-
+presentation>` custom element — see "Key design decision: scroll-driven playback" below.
+- `index.ts` — barrel + `renderPresentation`/`renderScrollPresentation`, which register the
+  respective element and return one instance with `.render()` already called.
 
 ## Key design decision: every element's position is a CSS percentage of the slide, not a px value
 
@@ -784,6 +808,141 @@ navigation time, not a fixed predecessor) would mean computing `resolveMorphMatc
 time again, reintroducing exactly the live-object-graph dependency this design deliberately avoided
 — see the "no dependency on the object graph" paragraph above.
 
+## Key design decision: scroll-driven playback
+
+`docs/scroll-driven-playback.md` scoped this as a future feature and recorded two pieces of
+enabling groundwork (the central duration-resolution API in `@pptx2html/presentation`'s
+`resolve/timing.ts`, and migrating slide-transition playback onto the Web Animations API) without
+building the feature itself. This section covers what actually got built, including one real
+reframing of that document's own original premise.
+
+**No "is this deck fully time-resolved" gate — scroll position replaces the click/auto-advance
+trigger entirely, so a deck's authored click-gating becomes irrelevant.** The design note's
+original framing assumed the feature could only work for a deck where every wait had already been
+replaced by a number (no `onClick`/`onNext` anywhere) — reasoned to be the _uncommon_ case for a
+real `.pptx`. That assumption turned out to be the wrong frame: reaching a point on the scroll axis
+_is_ the trigger, the same way a click already is for `PptxPresentationElement` — so a slide's
+`advanceOnClick`/`advanceAfter` and a `Slide.timing` node's `onClick`/`onNext` start condition are
+simply never consulted by `resolveScrollTimeline` at all, for either kind of segment. What's
+actually required is much narrower: every segment needs a _duration_ (to occupy scroll distance)
+and a _sequence position_ (to land in the right order) — both already exist or default sensibly for
+virtually every deck, via machinery this package already had:
+
+- `resolveTransitionDurationMs` already defaults an absent `speed` to `fast` (400ms), even with
+  zero authored transition data at all.
+- `collectFadeAnimations` (`animation.ts`, unchanged, reused verbatim) already resolves a
+  click-gated fade's start via `resolveTimeNodeStartMs` and, when that's `'indefinite'`, already
+  treats it as `delayMs: 0` and plays it immediately — exactly the "sequence, not full timing"
+  policy scroll mode needs, for free.
+- A slide with **no transition at all**, or one whose `effect.kind` isn't among the three this
+  package actually animates (`push`/`fade`/`morph`), gets a **synthetic default of `push`
+  (direction `'u'`)** in scroll mode specifically — a _different_ fallback than real-time mode's
+  instant `display: none`/`block` swap, chosen because an abrupt cut reads badly mid-scrub and a
+  vertical push matches the scrollytelling mental model directly (scrolling down brings the next
+  slide up into view). Reported via `transition-effect-approximated-for-scroll` only when an
+  authored-but-unsupported effect was actually substituted — a wholly absent transition is not
+  "unsupported," so it's silently defaulted, matching how real-time mode never reports a slide with
+  no transition either.
+
+Net effect: **`resolveScrollTimeline` needed zero new resolvers in `@pptx2html/presentation`.**
+Everything genuinely reusable (`resolveTransitionDurationMs`, `resolveTimeNodeStartMs`,
+`resolveTimeNodeDuration` via `collectFadeAnimations`, `resolveMorphMatch` via
+`resolveSlideMorphMatch`) already existed and was already renderer-agnostic — this is a new
+composition of existing primitives plus new orchestration/DOM, entirely inside this package, the
+same "resolution logic lives with the model, rendering policy lives with the renderer" split this
+file's other design decisions already follow.
+
+**A separate custom element, not a mode on `PptxPresentationElement`.** Click-driven navigation
+(`goToSlide`'s mid-transition blocking, `#currentAnimations`) and continuous scroll-scrub are
+different enough state machines that folding scroll mode into the existing class would just mean
+two code paths inside it. `PptxScrollPresentationElement` reuses `renderSlide` for the actual
+per-slide DOM — no rendering logic is duplicated, only orchestration is new — and, like
+`PptxPresentationElement`, keeps no dependency on the `Presentation`/`Slide` object graph after
+`render()` returns: `resolveScrollTimeline`'s `ScrollSegment`s already only carry plain data
+(numbers, `ShapeFadeAnimation`, `MorphMatchSummary`, `TransitionEffect`), the same reduction
+`morph.ts`'s own doc comment explains is a hard requirement, not a preference, for this project's
+freestanding-HTML-file export goal.
+
+**Every `Animation` is created once, paused immediately, and scrubbed via `currentTime` —
+`render()` builds them all up front, `seekTo(ms)` never calls `.animate()` again.** Unlike
+`PptxPresentationElement`, which fires a new `Animation` per navigation and lets it play out in real
+time, this element creates exactly one `Animation` per transition-segment participant (the
+`push`/`fade` pair, or a Morph segment's per-shape matched/disappearing/appearing animations) and
+per content-phase fade at `render()` time, via `el.animate(keyframes, { duration, fill: 'both' })`
+immediately followed by `.pause()`. `seekTo(ms)` — the core, directly testable entry point, with no
+DOM-measurement dependency of its own — locates the active segment (`locateSegment`, a pure module-
+level function) and just writes `animation.currentTime` on whichever animations are relevant, using
+`fill: 'both'` so a paused animation holds its start/end frame correctly outside `[0, duration]`
+too. One consequence worth calling out: **scrubbing backward through a transition needs no separate
+"reverse" logic at all** — unlike `PptxPresentationElement`'s `REVERSE_SIDE_DIRECTION`-based replay
+for backward navigation, setting a _smaller_ `currentTime` on the exact same `Animation` the user
+scrubbed forward through already shows it partway undone, for free, as a direct consequence of
+WAAPI's own scrubbing semantics.
+
+**Morph's departing-shape hide is a direct `opacity` style write, not a third `Animation` — and
+needs its own explicit reset, unlike everything else in this element.** Real-time `#animateMorph`
+hides a matched pair's departing copy via a zero-duration `Animation`, safe there because exactly
+one transition is ever "in flight" and `#finalizeTransition`'s cancellation loop reverts it once
+that transition settles. Scroll mode has no such moment — any segment can become active or inactive
+repeatedly as the user scrubs back and forth, so a `fill: 'both'` Animation permanently pinning that
+shape's opacity to 0 would never naturally un-pin itself once the user scrubs back into that slide's
+_own_ content phase (where the shape is no longer "departing," just present). `seekTo` instead
+writes `opacity: '0'` directly on each matched pair's departing element only while that transition's
+window is the active state, tracks which elements it touched in `#hiddenMorphShapes`, and resets
+them (`opacity: ''`) at the very start of the _next_ `seekTo` call before that call's own active
+state re-applies whatever's needed — so a shape reset can never lag a frame behind the state that
+should own it.
+
+**No `position: sticky`/`fixed` anywhere, and — since a later session — the visible content isn't
+even a descendant of the scrolling element.** The first version of this element nested
+`.pptx-scroll-viewport` (the actual rendered slides) inside `.pptx-scroll-track` (the scrolling
+element), compensating for scroll with a manual `transform: translateY(scrollTop)` write every
+frame — a deliberate substitute for `position: sticky`/`fixed` (both known sources of
+cross-browser inconsistency, and both hand control of "where does this sit on screen" to the
+browser's own reflow timing, the wrong trade for a feature whose later goal is _exact_, frame-synced
+"perfect" pinning). **That version visibly jittered**, caught by the user in actual browser use: the
+rendered slide subtree is real, non-trivial DOM, and having it live inside the actively-scrolling
+element meant the browser's own native scroll compositing of that subtree and this class's
+once-per-frame JS correction were two independent, not-quite-synchronized sources of truth for the
+same box. The fix went a step further than the original plan: **`.pptx-scroll-viewport` is now a
+sibling of `.pptx-scroll-track`, not its descendant, and needs no positioning write on scroll at
+all** — since it was never part of the scrolling subtree, it simply never moves, no transform
+required to keep it visually put. `.pptx-scroll-track` (`overflow-y: auto`) is still the one real
+scroll region, a child of this element's own shadow DOM, not `window`/`document` — the host page
+must give `<pptx-scroll-presentation>` an explicit box (e.g. `height: 100vh`) and must not nest it
+inside another scrollable ancestor, since this element assumes it owns the one scroll region
+involved — but now it holds nothing but `.pptx-scroll-spacer`, a plain in-flow div whose only job is
+to _be_ the scroll distance (`height: totalDurationMs * pixelsPerSecond / 1000`), no visible content
+at all. Both `.pptx-scroll-track` and `.pptx-scroll-viewport` are `position: absolute` against
+`:host` (now `position: relative` for exactly this), sized to cover the same box — the track sits on
+top (`z-index: 1`) purely so it keeps hit-testing scroll/wheel/touch gestures anywhere over the
+visible area (wheel/touch scroll delegation only walks up the ancestor chain from whatever's hit,
+never sideways to a sibling, so it has to be topmost to receive them) — a known trade-off, since it
+also means the track captures clicks; harmless today since nothing this package renders is
+interactive, but would need revisiting if that changes. `.pptx-scroll-viewport` holds every rendered
+slide permanently stacked underneath it (unlike `PptxPresentationElement`, which only goes
+`position: absolute` transiently during a transition, this element has no single-slide "normal flow"
+state to return to).
+
+**RAF-throttled scroll handling — the `scroll` listener does no work itself.** `#handleScroll` just
+records the latest `scrollTop`; a `requestAnimationFrame` loop (`#flushScroll`, started on first
+scroll, cancelled in `disconnectedCallback`) reads it once per frame and calls `seekTo` —
+coalescing however many `scroll` events the browser fires within one frame into a single update,
+standard scroll-perf practice, and independently useful for a future "perfect pinning" pass (one
+clock, read once per frame, not once per event) even though there's no longer a second write
+(the viewport's own positioning) to keep in sync alongside it. Tested by stubbing
+`requestAnimationFrame`/`cancelAnimationFrame` directly (`vi.stubGlobal`) rather than fighting
+fake-timer/rAF interaction — see Tests below.
+
+**Deliberately out of scope for this pass**, all noted in `docs/scroll-driven-playback.md`: native
+CSS `animation-timeline: scroll()`/`view()` (would need re-deriving every `Animation`'s timing as
+scroll-range percentages, and uneven browser support — the JS-driven approach above is what that
+document's own WAAPI-migration rationale already pointed toward); scroll-snap-to-slide-boundary
+(native `scroll-snap-type` could layer on later without touching `seekTo`'s own math); and any
+`Slide.timing` behavior beyond the fade-on-whole-shape coverage real-time mode already has — scroll
+mode inherits exactly that coverage via the unchanged `collectFadeAnimations`, not a new animation
+pass.
+
 ## Scope boundary — what's intentionally unmodeled (yet)
 
 - **Run-level font colour only resolves solid fills.** `RunProperties.fill` can technically be a
@@ -1081,6 +1240,39 @@ gets reversed keyframes; and navigating away then back to a slide replays its fa
 `#playSlideAnimations` runs from `#updateActiveSlide` on every path that makes a slide active, not
 just the first.
 
+`scroll-timeline.test.ts` (new, pure Node, mirrors `animation.test.ts`/`morph.test.ts`'s
+DOM-free-logic style) covers `resolveScrollTimeline` directly: an empty deck, the first slide never
+getting a `transition` segment even when it authors one, a fully static slide's content duration
+being exactly the dwell floor (default and a custom `minDwellMs` override), content duration being
+driven by a slide's own fades when that exceeds the floor, an authored `push`/`fade` transition
+playing as authored with `resolveTransitionDurationMs`'s own duration, an absent transition falling
+back to the synthetic push-up default unreported, an unmodeled effect kind falling back to it _and_
+reporting `transition-effect-approximated-for-scroll`, a confidently-matched Morph keeping its own
+effect and carrying the reduced `MorphMatchSummary`, a low-confidence Morph match degrading to a
+plain `fade` and reporting `morph-match-degraded` (reusing `resolveSlideMorphMatch`'s own existing
+behavior, not reimplemented), multi-slide absolute-ms chaining, and a forwarded
+`animation-build-unmodeled` report keyed to the right slide.
+
+`scroll-presentation-element.test.ts` (new) reuses the `happy-dom`/`HTMLElement.prototype.animate`
+mocking convention `presentation-element.test.ts` established, but a simpler `FakeAnimation` — no
+`.finished` promise or `setTimeout`-driven resolution needed, since scroll-mode playback never
+awaits completion, only reads/writes `currentTime` on an already-paused animation. Covers: one
+element per slide rendered into the viewport; only the first slide visible at `ms: 0`; `seekTo`
+during a static slide's own content phase showing only that slide; `seekTo` mid-transition showing
+both participating slides and setting each animation's `currentTime` to the elapsed offset; scrubbing
+backward being a smaller `currentTime` on the exact same `Animation` instance (no new one created);
+every animation being `paused` immediately after creation; `seekTo` clamping to `[0,
+totalDurationMs]`; a content-phase fade's `currentTime` being relative to its own slide's content
+start and clamped to its own `[0, delay + duration]` domain even when the slide's own dwell is
+longer; a Morph transition's departing shape getting `opacity: '0'` for the transition window and
+having it reset once scrubbed back into its own slide's content phase; a low-confidence Morph match
+still scrubbing correctly as a plain crossfade; `pixelsPerSecond` resizing the track; and, with
+`requestAnimationFrame`/`cancelAnimationFrame` stubbed via `vi.stubGlobal` (not fake timers — real
+`requestAnimationFrame`/fake-timer interaction is exactly the fragility `docs/scroll-driven-
+playback.md` and this file's own design decision above call out avoiding), that multiple `scroll`
+events dispatched before the stubbed frame callback fires coalesce into exactly one `seekTo` call,
+using only the latest `scrollTop`.
+
 ## Next likely steps
 
 1. Widening slide-transition coverage beyond `push`/`fade` — each remaining `TransitionEffect.kind`
@@ -1156,3 +1348,19 @@ just the first.
     confirm this still looks right whenever this package's DOM structure changes, and now also
     gains a working slideshow (click/keyboard navigation) for free once it re-renders with this
     change, since `renderPresentation`'s returned element already wires it up.
+11. **Done, a later session**: scroll-driven playback (`scroll-timeline.ts`, `scroll-presentation-
+element.ts`, `renderScrollPresentation`) — see "Key design decision: scroll-driven playback" above
+    for the full mechanism, including a later fix within that same session (the viewport-jitter bug,
+    same section) for why the visible content lives outside the scrolling element entirely rather
+    than inside it. `apps/web-demo` now wires up `<pptx-scroll-presentation>` too, via a playback-mode
+    toggle next to the file picker (`index.html`/`index.ts`) that re-renders the already-parsed
+    `Presentation` in whichever mode is selected, without re-parsing. Remaining gaps, all
+    deliberately deferred (see that design decision's own closing paragraph): native CSS
+    `animation-timeline: scroll()`/`view()` as a possible perf optimization over the current
+    JS-driven scroll listener; scroll-snap-to-slide-boundary; the "perfect pinning" goal (still
+    unstarted — the sibling-viewport fix already removes the browser's native scroll compositing
+    from the equation, which if anything makes a future exact/eased pin easier to build, not harder);
+    and the `.pptx-scroll-track` capturing all clicks trade-off (harmless today, no interactive
+    content exists yet — see the design decision's own note). Also unstarted: exposing `minDwellMs`
+    (currently a fixed default in `scroll-timeline.ts`) as a public property the way
+    `pixelsPerSecond` already is, if a real deck's static slides need visible tuning.

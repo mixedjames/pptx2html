@@ -31,6 +31,31 @@
         font-size: 0.9rem;
         margin-bottom: 0.25rem;
       }
+      #mode-fieldset {
+        display: inline-flex;
+        gap: 1rem;
+        align-items: center;
+        border: none;
+        padding: 0;
+        margin: 0.5rem 0;
+      }
+      #mode-fieldset legend {
+        font-weight: 600;
+        padding: 0;
+      }
+      #output {
+        margin-top: 1rem;
+      }
+      /* Scroll mode needs an explicit box (see PptxScrollPresentationElement's own doc comment —
+         it owns the one scroll region in its area of the page) and must not itself be nested
+         inside another scrollable ancestor, so this container is fixed-height, not the page. */
+      #output.scroll-mode {
+        height: 80vh;
+        border: 1px solid #ccc;
+      }
+      #output.scroll-mode > * {
+        height: 100%;
+      }
     </style>
   </head>
   <body>
@@ -38,6 +63,11 @@
       <h1>pptx2html web demo</h1>
       <p>Pick a .pptx file — the parsed object tree is logged to the console.</p>
       <input id="file-input" type="file" accept=".pptx" />
+      <fieldset id="mode-fieldset">
+        <legend>Playback mode</legend>
+        <label><input type="radio" name="mode" value="click" checked /> Click-driven</label>
+        <label><input type="radio" name="mode" value="scroll" /> Scroll-driven</label>
+      </fieldset>
       <p id="status"></p>
       <div id="unsupported-features" class="unsupported-features" hidden></div>
       <div id="output"></div>

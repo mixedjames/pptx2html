@@ -46,7 +46,7 @@ transition.ts`: a `Slide`'s optional `transition` (§19.3.1.49, `p:transition`) 
   timing tree's own effective duration (or `'indefinite'` if any node is gated on a click/other
   external event with no numeric delay fallback), and `resolveTransitionDurationMs` answers the
   smaller `TransitionSpeed` → ms question (moved here from `to-html5`, which now consumes it) — see
-  "Future feature: scroll-driven playback" below for why this groundwork exists.
+  "Scroll-driven playback" below for why this groundwork exists (now consumed by that feature too).
 - **`packages/reader`** — complete, parses real `.pptx` byte streams end-to-end into the
   `presentation` graph, including a theme's `fmtScheme` fill/line style matrices, a
   shape/picture/connector's own `p:style` `fillRef`/`lnRef`, a slide's `p:timing`
@@ -196,8 +196,8 @@ query.ts`'s `findAlternateContentChild` (new) surfaces both the `mc:Choice` and 
    staged reveal needs the in-slide build-step concept mentioned above, likely the biggest single
    piece left. A relative (`p:by`) colour shift on `animClr` and a colour value on an `anim`/`p:tav`
    keyframe are both unmodeled at the `presentation` layer (absolute `from`/`to` colours only) —
-   see `animation.ts`'s own doc comments in `packages/presentation`. Read "Future feature:
-   scroll-driven playback" below (and `docs/scroll-driven-playback.md`) before extending this
+   see `animation.ts`'s own doc comments in `packages/presentation`. Read "Scroll-driven playback"
+   below (and `docs/scroll-driven-playback.md`) before extending this
    further — it constrains _how_ this should be driven, not just what it should render; this
    session's fade pass already followed those constraints (WAAPI, duration/start-delay resolution
    in `@pptx2html/presentation`'s `resolve/timing.ts`) but is a known, documented approximation on
@@ -366,27 +366,34 @@ CLAUDE.md`'s scope boundary, but the freestanding-file angle is a sharper reason
    Morph) — a `font-family` referencing an uninstalled system font is a related, softer gap in the
    same direction, worth knowing about but not the priority.
 
-## Future feature: scroll-driven playback
+## Scroll-driven playback
 
-**Not started.** Full design note: [`docs/scroll-driven-playback.md`](docs/scroll-driven-playback.md).
-In short — a future feature will let a **fully time-resolved** deck (every advance driven by a
-numeric delay, nothing waiting on a click) be scrubbed by scroll position instead of played back in
-real time. Two constraints from that note apply to _all_ animation/transition work from here on,
-not just a future scroll feature, so they're repeated here:
+**Implemented.** Full design note (including what changed from the original plan):
+[`docs/scroll-driven-playback.md`](docs/scroll-driven-playback.md). In short — `@pptx2html/to-html5`
+now has a second custom element, `<pptx-scroll-presentation>` (`renderScrollPresentation`,
+alongside the pre-existing click-driven `<pptx-presentation>`/`renderPresentation`), that positions
+every slide transition and build animation on one scrubbable scroll timeline instead of playing them
+back in real time. The original design note assumed this would only work for a **fully
+time-resolved** deck (every advance driven by a numeric delay, nothing waiting on a click) — that
+assumption turned out to be unnecessary: scroll position replaces the click/auto-advance trigger
+entirely rather than requiring one to already be absent, so there's no such gate in the actual
+implementation. See `packages/to-html5/CLAUDE.md`'s "Key design decision: scroll-driven playback"
+for the full mechanism. Two constraints from the original design note guided this work and still
+apply to _all_ future animation/transition work, not just this feature:
 
 1. **Duration/timing computation belongs in `packages/presentation/resolve/`, as a pure function,
-   not inside a renderer.** Whether a timing tree is fully time-resolved (no `onClick`/`onNext`/etc.
-   wait anywhere) and how long any node/transition takes are renderer-agnostic questions — see
-   `resolve/timing.ts`.
+   not inside a renderer.** How long any node/transition takes is a renderer-agnostic question —
+   see `resolve/timing.ts`. Scroll-driven playback needed zero new resolvers there, a validation of
+   this rule rather than an exception to it.
 2. **Prefer the Web Animations API over plain CSS `transition`/`@keyframes` for anything new.** A
    plain CSS transition can only be started and left to run; a WAAPI `Animation`'s `currentTime` is
-   directly readable/settable, which is exactly the capability a future scroll-time player needs.
-   `to-html5`'s slide-transition playback already migrated to this — see
-   `packages/to-html5/CLAUDE.md`.
+   directly readable/settable, which is exactly the capability scroll-driven playback needs, and
+   which `to-html5`'s slide-transition playback (both elements) is built on.
 
-Don't let `PptxPresentationElement.goToSlide`'s click-navigation policies (slide-granular,
-non-interruptible mid-transition) be assumed as the only reasonable navigation shape elsewhere — a
-future scroll-seek API is additive, not a replacement.
+`PptxPresentationElement.goToSlide`'s click-navigation policies (slide-granular,
+non-interruptible mid-transition) remain exactly that — a separate element,
+`PptxScrollPresentationElement`, owns the scroll-driven navigation model instead, additive rather
+than a replacement, per the original design note's own guidance.
 
 ## Where to look
 
@@ -394,4 +401,4 @@ future scroll-seek API is additive, not a replacement.
 - `packages/reader/CLAUDE.md` — parsing details, the SlideMaster↔SlideLayout cycle, open gaps.
 - `packages/to-html5/CLAUDE.md` — rendering design decisions (coordinate math, percentage-based
   responsive layout, placeholder inheritance), scope boundary, test layout.
-- `docs/scroll-driven-playback.md` — design note for a future scroll-driven playback feature.
+- `docs/scroll-driven-playback.md` — design note for the scroll-driven playback feature (implemented).

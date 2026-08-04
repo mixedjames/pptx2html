@@ -1,9 +1,12 @@
 # Scroll-driven playback (design note)
 
-**Status: the feature itself is not started; the enabling groundwork (below) is done.** This
-document exists to scope a future feature and to make sure the animation/transition work happening
-now doesn't quietly make decisions that would block it later. See root
-[`CLAUDE.md`](../CLAUDE.md) for how this fits into the rest of the project.
+**Status: implemented (v1).** This document originally scoped a future feature and recorded
+enabling groundwork done ahead of it; that groundwork is now built on top of, and the feature itself
+exists — `@pptx2html/to-html5`'s `<pptx-scroll-presentation>` (`scroll-presentation-element.ts`,
+`renderScrollPresentation`). See that package's CLAUDE.md's "Key design decision: scroll-driven
+playback" for the actual mechanism; this document keeps the original motivation plus a record of
+what changed from the original plan and what's still open. See root [`CLAUDE.md`](../CLAUDE.md) for
+how this fits into the rest of the project.
 
 ## The feature
 
@@ -20,68 +23,96 @@ scrolling up moves backward; scrolling partway through a slide's entrance animat
 partway animated in. The deck becomes something you scrub through like a long web page, rather than
 something you sit and watch — a "scrollytelling" presentation.
 
-## Why this is hard: not every deck has a total duration
+## The premise that changed: scroll position _is_ the trigger, not a substitute for one
 
-A deck authored for a live presenter, advanced by clicking, has animation steps that wait
-indefinitely for that click. There is no way to know in advance how long a real audience will take
-to click through it — so there's no "total duration" to map scroll position onto. This isn't an
-edge case to work around; it's the normal way most `.pptx` files are authored.
+The original version of this document reasoned that the feature could only work for a deck where
+every wait had already been replaced by a number — no animation step anywhere gated on a click (or
+mouseover, or waiting for a video to finish) — and called that the _uncommon_ case for a real
+`.pptx`, a real limitation to design around.
 
-The feature can only work for decks where every wait has been replaced by a number: no animation
-step anywhere is gated on a click (or a mouseover, or waiting for a video to finish, etc.) —
-everything has an explicit delay/duration instead. Whether a given deck qualifies is something we
-can and should detect automatically, rather than assuming.
+That framing turned out to be the wrong one, surfaced while actually scoping the implementation.
+**Scroll position doesn't need a deck to already be timer-driven — it replaces the click/auto-advance
+trigger itself, the same way a click already does for this package's existing click-driven
+element.** Reaching a point on the scroll axis _is_ the trigger. A deck's authored
+`advanceOnClick`/`advanceAfter` and any `Slide.timing` node's `onClick`/`onNext` gating are simply
+never consulted by scroll mode's timeline assembly at all — they're facts about how a _live
+presenter_ advances the deck, irrelevant once scrolling has taken over that job entirely.
 
-## What's been built so far: enabling groundwork, not the feature itself
+What's actually required turned out to be much narrower than "no click anywhere": every segment
+scroll mode animates just needs a **duration** (to occupy scroll distance) and a **sequence
+position** (to land in the right order) — and both already existed or defaulted sensibly for
+virtually every deck, via machinery this package already had (`resolveTransitionDurationMs`'s
+existing `speed`-absent default, `collectFadeAnimations`'s existing "play a click-gated fade
+immediately at `delayMs: 0`" policy). The one genuine gap — a slide with no transition at all, or an
+effect kind nothing here animates — got a new, scroll-specific synthetic default (a vertical push)
+rather than blocking on it. See `packages/to-html5/CLAUDE.md`'s design decision for the full
+reasoning and why this meant **no new resolvers were needed in `@pptx2html/presentation` at all** —
+a genuine validation of that package's `resolve/` groundwork, not just a place it happened to be
+reused.
 
-Two pieces, both scoped to _enabling_ this feature later without building the feature itself yet —
-both done now:
+Net result: there is **no "is this deck scroll-eligible" gate anywhere in the implementation** —
+every deck renders in scroll mode, with the same play-what-you-can/report-what-you-can't philosophy
+this package's real-time renderer already uses for everything else.
 
-1. **A central timing API in the object model** (`@pptx2html/presentation`'s `resolve/timing.ts`).
-   Given a slide's animation timing tree or its transition, `resolveTimeNodeDuration`/
-   `resolveSlideTimingDuration` answer "how long does this take, or is it 'indefinite' because
-   something's gated on a click/other external event with no numeric delay fallback" — exactly the
-   "is this fully time-resolved" question above. Any future renderer — the existing real-time one,
-   or a future scroll-driven one — needs the identical answer, so this lives with the object model,
-   not duplicated inside a renderer. `resolveTransitionDurationMs` replaces the small piece of logic
-   (`fast`/`med`/`slow` → milliseconds for slide transitions) that used to be private to the HTML
-   renderer. The container-scheduling/repeat-interaction math is a documented approximation, not
-   spec-exact — see that file's own doc comments — since nothing consumes exact values yet.
-2. **Slide-transition (`push`/`fade`) playback in `@pptx2html/to-html5` now uses the Web Animations
-   API** instead of plain CSS transitions. A plain CSS `transition` can only be started and left to
-   run — there's no way to ask it "what does this look like 40% of the way through," which is
-   exactly the capability a scroll-driven player needs (map a scroll position to a point in an
-   animation, including scrubbing backward). The Web Animations API's `Animation` object _is_
-   seekable — its `currentTime` can be read and written directly — so building on it now, even
-   though nothing sets `currentTime` from scroll position yet, means the rendering mechanism itself
-   won't need to be replaced when that lands later. (`happy-dom`, this repo's DOM test environment,
-   implements no Web Animations API at all, so `to-html5`'s tests install their own
-   `HTMLElement.prototype.animate` mock — see `packages/to-html5/CLAUDE.md`'s Tests section.)
+## What's been built
 
-Scroll position → time mapping — the part that actually makes this a _scroll-driven_ feature — is
-still explicitly **not** built. That's future work now that the above groundwork exists.
+- **The central timing API in `@pptx2html/presentation`** (`resolve/timing.ts`) — unchanged from
+  what this document originally described, and it turned out to need no additions at all for scroll
+  mode: `resolveTimeNodeStartMs`/`resolveTimeNodeDuration` already answer exactly the per-node
+  questions `collectFadeAnimations` (and, through it, scroll mode) needs, and
+  `resolveTransitionDurationMs` already answers the transition-duration question with the right
+  defaults built in.
+- **Slide-transition (`push`/`fade`/`morph`) playback via the Web Animations API**, in both
+  `<pptx-presentation>` (real-time, fire-and-forget) and now `<pptx-scroll-presentation>` (every
+  `Animation` created once, paused, and scrubbed via `currentTime`) — the seekability this document
+  originally called out as the motivating reason to prefer WAAPI over plain CSS `transition` is
+  exactly what scroll mode's `seekTo(ms)` relies on.
+- **The scroll↔time mapping itself** — `scroll-timeline.ts`'s `resolveScrollTimeline` (pure,
+  assembles one absolute-millisecond timeline from a `Presentation`) plus
+  `scroll-presentation-element.ts`'s `PptxScrollPresentationElement` (the DOM/scroll-listener side:
+  a real scrollable track inside the element's own shadow DOM, RAF-throttled, `seekTo` writing
+  `Animation.currentTime` directly). See `packages/to-html5/CLAUDE.md` for the full mechanism,
+  including why nothing here uses `position: sticky`/`fixed` (a decision made specifically to leave
+  room for "perfect pinning," below).
 
-## Constraints for this and future animation work
+## Decisions resolved from "Explicitly undecided" (below)
+
+- **Scroll↔time mapping: JS-driven (a real scroll listener + `Animation.currentTime`), not native
+  CSS `animation-timeline: scroll()`/`view()`.** Chosen because it's what this document's own WAAPI-
+  migration rationale already pointed toward, and because native scroll-timelines would mean
+  re-deriving every `Animation`'s timing as scroll-range percentages against still-uneven browser
+  support — noted as a possible future perf optimization, not pursued in v1.
+- **Snap points: not implemented.** Scroll mode maps linearly; native CSS `scroll-snap-type` could
+  layer on top later purely as a CSS addition, without touching `seekTo`'s own math at all.
+- **Which package the feature lives in: entirely `@pptx2html/to-html5`.** No new code was needed in
+  `@pptx2html/presentation` — see "The premise that changed" above.
+
+## Still open
+
+- **"Perfect pinning."** The visible content (`.pptx-scroll-viewport`) is a sibling of the scrolling
+  element, not a descendant of it, and needs no positioning write on scroll at all — an earlier
+  version nested it inside the scroller and compensated with a manual `transform:
+translateY(scrollTop)` write per frame, which visibly jittered (the browser's own native scroll
+  compositing of that real, non-trivial DOM subtree and this class's once-per-frame JS correction
+  were two independent, not-quite-synchronized sources of truth for the same box — caught by the
+  user in actual browser use). Moving the content outside the scrolling subtree entirely fixed the
+  jitter and, if anything, makes a future exact/eased "perfect pinning" pass easier to build, not
+  harder — there's no longer any browser-native scroll-linked positioning to work around at all, just
+  plain JS state. See `packages/to-html5/CLAUDE.md`'s design decision for the full mechanism. Not
+  started.
+- **`minDwellMs` (the floor on a static slide's own scroll-timeline length) isn't configurable from
+  the element yet**, unlike `pixelsPerSecond` — a fixed default in `scroll-timeline.ts`.
+- Real click-driven build-step sequencing (an "On Click"/"After Previous" effect composing with its
+  ancestor container's own offset) remains unmodeled in _both_ renderers, same as before this
+  feature — scroll mode doesn't need it (see "The premise that changed"), and nothing about scroll
+  mode changes that gap for the real-time element.
+
+## Constraints for future animation work
+
+Both still apply, and scroll mode's own implementation followed them:
 
 - **Keep duration/timing computation separate from DOM-driving code**, and keep it in
   `@pptx2html/presentation`. Don't let a renderer grow its own private notion of "how long does
   this effect take."
-- **Don't drive new animation work with plain CSS `transition`/`@keyframes`** the way slide
-  transitions used to be — prefer the Web Animations API, or otherwise keep the "what should this
-  look like, and when" question answerable independently of how it's currently being played back.
-- **Keep navigation APIs slide/click-shaped separate from any future seek/scrub API.** Today's
-  `PptxPresentationElement.goToSlide()`/`.next()`/`.previous()` are slide-granular and intentionally
-  ignore new input while a transition plays — a fine policy for click-driven use, wrong for
-  continuous scrubbing. A future `seekTo`/`setProgress`-style API should be additive, not a special
-  case bolted onto `goToSlide`.
-
-## Explicitly undecided
-
-- How scroll position maps onto duration (linear? per-slide snap points? something else).
-- What actually drives scroll-linked rendering — native CSS scroll-driven animations
-  (`animation-timeline: scroll()`/`view()`) vs. a `requestAnimationFrame`/scroll-listener approach
-  that sets `Animation.currentTime` directly.
-- Which package the feature itself lives in.
-
-None of the above needs to be decided to do the enabling work above — they're listed here so they
-aren't accidentally decided by omission either.
+- **Prefer the Web Animations API over plain CSS `transition`/`@keyframes`** for anything new — an
+  `Animation`'s `currentTime` is directly readable/settable, which any scrubbable playback needs.

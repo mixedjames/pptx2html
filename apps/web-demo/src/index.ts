@@ -1,11 +1,20 @@
 import { readPresentation } from '@pptx2html/reader';
+import type { Presentation } from '@pptx2html/presentation';
 import type { UnsupportedFeature, UnsupportedFeatureCollector } from '@pptx2html/to-html5';
-import { renderPresentation } from '@pptx2html/to-html5';
+import { renderPresentation, renderScrollPresentation } from '@pptx2html/to-html5';
+
+type Mode = 'click' | 'scroll';
 
 const fileInput = document.getElementById('file-input');
 const status = document.getElementById('status');
 const output = document.getElementById('output');
 const unsupportedPanel = document.getElementById('unsupported-features');
+const modeInputs = [
+  ...document.querySelectorAll<HTMLInputElement>('#mode-fieldset input[name="mode"]'),
+];
+
+let currentPresentation: Presentation | undefined;
+let currentFileName = '';
 
 function setStatus(message: string): void {
   if (status) status.textContent = message;
@@ -55,6 +64,36 @@ function renderUnsupportedFeaturesPanel(collector: UnsupportedFeatureCollector):
   }
 }
 
+function currentMode(): Mode {
+  return modeInputs.find((input) => input.checked)?.value === 'scroll' ? 'scroll' : 'click';
+}
+
+/** (Re-)renders `currentPresentation` in whichever mode is currently selected — the one place
+ *  either a freshly-parsed file or a mode toggle ends up, so switching modes never needs a
+ *  re-parse. `renderScrollPresentation`'s `<pptx-scroll-presentation>` needs an explicit box (see
+ *  its own doc comment) — `#output`'s `scroll-mode` class (index.html) supplies that; `scroll-mode`
+ *  is toggled here rather than left permanently on, since it also fixes `#output`'s height even
+ *  when a click-driven render doesn't need one. */
+function renderCurrent(): void {
+  if (!currentPresentation) return;
+  const mode = currentMode();
+  output?.classList.toggle('scroll-mode', mode === 'scroll');
+
+  const { element, unsupportedFeatures } =
+    mode === 'scroll'
+      ? renderScrollPresentation(currentPresentation)
+      : renderPresentation(currentPresentation);
+  if (unsupportedFeatures.all.length > 0) {
+    console.log('Unsupported features:', unsupportedFeatures.all);
+    console.log('Unsupported features by slide:', unsupportedFeatures.bySlide);
+  }
+  renderUnsupportedFeaturesPanel(unsupportedFeatures);
+  output?.replaceChildren(element);
+  setStatus(
+    `Parsed ${currentFileName}: ${currentPresentation.slides.length} slide(s) (${mode}-driven).`,
+  );
+}
+
 if (fileInput instanceof HTMLInputElement) {
   fileInput.addEventListener('change', () => {
     const file = fileInput.files?.[0];
@@ -70,18 +109,17 @@ if (fileInput instanceof HTMLInputElement) {
         presentation.slides.forEach((slide, index) => {
           if (slide.timing) console.log(`Slide ${index + 1} timing:`, slide.timing);
         });
-        const { element, unsupportedFeatures } = renderPresentation(presentation);
-        if (unsupportedFeatures.all.length > 0) {
-          console.log('Unsupported features:', unsupportedFeatures.all);
-          console.log('Unsupported features by slide:', unsupportedFeatures.bySlide);
-        }
-        renderUnsupportedFeaturesPanel(unsupportedFeatures);
-        output?.replaceChildren(element);
-        setStatus(`Parsed ${file.name}: ${presentation.slides.length} slide(s).`);
+        currentPresentation = presentation;
+        currentFileName = file.name;
+        renderCurrent();
       })
       .catch((error: unknown) => {
         console.error(error);
         setStatus(`Failed to parse ${file.name}: ${String(error)}`);
       });
   });
+}
+
+for (const input of modeInputs) {
+  input.addEventListener('change', renderCurrent);
 }

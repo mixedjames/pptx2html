@@ -3,6 +3,14 @@ import { resolveTransitionDurationMs } from '@pptx2html/presentation';
 import { collectFadeAnimations, type ShapeFadeAnimation } from './animation.js';
 import { resolveSlideMorphMatch, type MorphMatchSummary } from './morph.js';
 import { renderSlide } from './slide.js';
+import {
+  findShapeElement,
+  IDENTITY_TRANSFORM,
+  morphKeyframes,
+  offscreenTransform,
+  readShapeBox,
+  REVERSE_SIDE_DIRECTION,
+} from './transition-keyframes.js';
 import { UnsupportedFeatureCollector } from './unsupported-features.js';
 
 /** `reportSlideLevelFeatures`'s return value — see its own doc comment. */
@@ -97,76 +105,6 @@ const STYLES = `
 
 const NEXT_KEYS = new Set(['ArrowRight', 'ArrowDown', 'PageDown', ' ', 'Enter']);
 const PREVIOUS_KEYS = new Set(['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace']);
-
-const REVERSE_SIDE_DIRECTION: Record<SideDirection, SideDirection> = {
-  l: 'r',
-  r: 'l',
-  u: 'd',
-  d: 'u',
-};
-
-/** The translate() a slide sits at when fully off-screen in `direction`, the way `push` uses it. */
-function offscreenTransform(direction: SideDirection): string {
-  switch (direction) {
-    case 'l':
-      return 'translate(-100%, 0)';
-    case 'r':
-      return 'translate(100%, 0)';
-    case 'u':
-      return 'translate(0, -100%)';
-    case 'd':
-      return 'translate(0, 100%)';
-  }
-}
-
-const IDENTITY_TRANSFORM = 'translate(0, 0)';
-
-/** A shape element's own resolved box, read straight off its inline style — see `readShapeBox`. */
-interface ShapeBox {
-  readonly left: string;
-  readonly top: string;
-  readonly width: string;
-  readonly height: string;
-  readonly transform: string;
-}
-
-/** Finds a slide subtree's own element for `shapeId`, scoped to that slide — see `#animateMorph`. */
-function findShapeElement(slideEl: HTMLElement, shapeId: number): HTMLElement | null {
-  return slideEl.querySelector<HTMLElement>(`[data-pptx-shape-id="${shapeId}"]`);
-}
-
-/**
- * Reads a shape element's own already-resolved `left`/`top`/`width`/`height`/`transform` inline
- * style — set once by `shape-tree.ts`'s `positionElement` at render time — rather than
- * recomputing anything via `coordinate.ts`. Returns `undefined` if `positionElement` never ran
- * for this element at all (no resolved `left`, meaning it's unpositioned/static-flow — a
- * pre-existing rendering gap, see `shape-tree.ts`'s own scope notes), since animating with an
- * empty-string keyframe value isn't a valid CSS length.
- */
-function readShapeBox(el: HTMLElement): ShapeBox | undefined {
-  if (!el.style.left) return undefined;
-  return {
-    left: el.style.left,
-    top: el.style.top,
-    width: el.style.width,
-    height: el.style.height,
-    // "none" rather than "" so a keyframe interpolates from/to a well-defined identity transform
-    // instead of an ambiguous empty string when only one side of the pair rotates/flips.
-    transform: el.style.transform || 'none',
-  };
-}
-
-/**
- * The two-keyframe `left`/`top`/`width`/`height`/`transform` tween a matched pair's *arriving*
- * copy uses in `#animateMorph` — deliberately no `opacity` field at all, so the element stays
- * fully opaque for its entire journey. See `#animateMorph`'s own doc comment for why: crossfading
- * two overlapping opaque copies (the technique whole-slide `#animateFade` correctly uses) makes
- * *both* visibly translucent for the middle of the transition, wrongly revealing whatever sits
- * behind them — wrong for a shape that's genuinely the same object, just moved/resized/rotated.
- */
-function morphKeyframes(from: ShapeBox, to: ShapeBox): Keyframe[] {
-  return [{ ...from }, { ...to }];
-}
 
 /**
  * A `<pptx-presentation>` element: renders a `Presentation` object graph into a shadow DOM as a
