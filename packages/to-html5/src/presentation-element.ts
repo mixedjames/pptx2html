@@ -1,6 +1,7 @@
 import type { Presentation, SideDirection, Slide, SlideTransition } from '@pptx2html/presentation';
 import { resolveTransitionDurationMs } from '@pptx2html/presentation';
 import { collectFadeAnimations, type ShapeFadeAnimation } from './animation.js';
+import { observeContainSize, type ContainSizeController } from './contain-size.js';
 import { resolveSlideMorphMatch, type MorphMatchSummary } from './morph.js';
 import { renderSlide } from './slide.js';
 import {
@@ -84,10 +85,11 @@ function reportSlideLevelFeatures(
 
 const STYLES = `
   :host {
-    display: block;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
   }
   .pptx-presentation {
-    display: block;
     position: relative;
     overflow: hidden;
   }
@@ -134,6 +136,7 @@ const PREVIOUS_KEYS = new Set(['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace']);
  */
 export class PptxPresentationElement extends HTMLElement {
   readonly #slidesContainer: HTMLElement;
+  readonly #containSize: ContainSizeController;
   #slides: HTMLElement[] = [];
   #transitions: (SlideTransition | undefined)[] = [];
   #animations: readonly (readonly ShapeFadeAnimation[])[] = [];
@@ -156,6 +159,13 @@ export class PptxPresentationElement extends HTMLElement {
 
     this.addEventListener('click', () => this.next());
     this.addEventListener('keydown', (event) => this.#handleKeydown(event));
+
+    // Fine to set up here despite the constructor restrictions noted below — attaching a
+    // ResizeObserver mutates no attributes, unlike `tabIndex`. Safe even before this element is
+    // connected to a document: `#slidesContainer` (`this`'s own observed box) simply measures as
+    // zero until layout actually happens, and `observeContainSize`'s own `apply()` already
+    // no-ops gracefully on a zero measurement. See contain-size.ts for the full mechanism.
+    this.#containSize = observeContainSize(this, this.#slidesContainer);
   }
 
   connectedCallback(): void {
@@ -166,6 +176,10 @@ export class PptxPresentationElement extends HTMLElement {
     // throws in strict implementations (WebKit) and aborts the upgrade entirely. Guarded so it
     // doesn't clobber an explicit `tabindex` the host page may have set.
     if (!this.hasAttribute('tabindex')) this.tabIndex = 0;
+  }
+
+  disconnectedCallback(): void {
+    this.#containSize.disconnect();
   }
 
   /** Returns the set of `.pptx`-authored features this render didn't (fully) support. */
@@ -206,8 +220,14 @@ export class PptxPresentationElement extends HTMLElement {
     // Needed because a transition briefly makes both participating slides `position: absolute`
     // (see #beginTransitionFrame), at which point neither contributes to this container's
     // normal-flow height — without this it would collapse to zero height for the transition's
-    // duration. Mirrors slide.ts's own per-slide aspect-ratio line.
+    // duration. Mirrors slide.ts's own per-slide aspect-ratio line. Also what `#containSize`
+    // (below) relies on: it only ever toggles which of width/height is the explicit ("100%") one,
+    // trusting this `aspect-ratio` to derive whichever one is left `auto` — see contain-size.ts.
     this.#slidesContainer.style.aspectRatio = `${presentation.slideSize.width} / ${presentation.slideSize.height}`;
+    // Re-decide width- vs height-driven sizing immediately rather than waiting for the next
+    // incidental resize — the new deck's own aspect ratio (just set above) may call for a
+    // different answer than whatever the previous render() left in place. See contain-size.ts.
+    this.#containSize.reapply();
     this.#currentIndex = 0;
     this.#updateActiveSlide();
     return unsupportedFeatures;

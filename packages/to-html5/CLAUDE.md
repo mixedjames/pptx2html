@@ -260,6 +260,13 @@ non-scaling-stroke`" below); gradient/pattern/blip fills and a
 element.ts` produce pixel-identical `push`/`fade`/`morph` visuals from one source. Nothing here
   mutates the DOM (`findShapeElement`/`readShapeBox` only read), which is what makes reuse from a
   scrubbed (not just fire-and-forget) player possible.
+- `contain-size.ts` — `observeContainSize`, a small `ResizeObserver`-backed helper shared by
+  `presentation-element.ts` and `scroll-presentation-element.ts` that keeps their respective sized
+  container letterboxed/pillarboxed within whatever box their host is given, toggling between
+  width-driven and height-driven sizing depending on which one actually fits — see "Key design
+  decision: every element's position is a CSS percentage of the slide" below for why this needed a
+  (deliberately minimal) `ResizeObserver` rather than being CSS-only like everything else in this
+  package.
 - `scroll-timeline.ts` — pure logic, no DOM: `resolveScrollTimeline` assembles a whole
   `Presentation` into one absolute-millisecond `ScrollTimeline` (a `ScrollSegment` per slide, each
   with an optional `transition` window and a `content` window) for `scroll-presentation-element.ts`
@@ -291,6 +298,54 @@ percentage to land in the right place. That's why `renderGroup`'s wrapper is str
 auto-sized — every group wrapper in a nesting chain ends up pixel-for-pixel the same size as the
 slide root, so a percentage computed relative to the slide root resolves identically no matter
 which wrapper it's actually nested inside.
+
+**Bug, a later session: width-only scaling cropped the deck on a host proportionally wider than the
+deck's own aspect ratio.** `.pptx-slide` at `width: 100%` with `aspect-ratio` locking height means
+height is _purely_ derived from whatever width the container hands it, with no ceiling — fine for
+this component's whole history, since it was only ever embedded with an auto-height host (no fixed
+vertical box), so the page just grew as tall as the content needed. That assumption broke once
+`<pptx-presentation>`/`<pptx-scroll-presentation>` started being given an _explicit_, fixed
+viewport-height box (`apps/web-demo`/`apps/pages`'s full-screen layouts, this same session): on an
+especially wide viewport, `width: 100%` still forces a wide box, `aspect-ratio` still derives a
+correspondingly tall height from it — and that height can exceed the fixed box it's actually been
+given, with nothing capping it, cropped by `overflow: hidden`.
+
+A first fix attempt gave `.pptx-presentation` `max-width: 100%; max-height: 100%` and no explicit
+width/height of its own, reasoning that `aspect-ratio` would fill in a size satisfying both caps —
+**this doesn't work, and was a second regression (the deck stopped rendering at all) caught
+immediately after shipping the first one.** `max-width`/`max-height` alone are only ever a ceiling
+on whatever size the normal sizing algorithm would otherwise produce for a _non-replaced_ element
+(a plain `div`, unlike `img`/`video`, which get this exact behavior for free from `object-fit:
+contain`) — they don't themselves supply a preferred size to size toward. With no explicit
+width/height at all, a block box falls back to shrink-to-fit sizing based on its content's
+intrinsic size — and `.pptx-presentation`'s content (`.pptx-slide`, itself `width: 100%` of its
+parent) is entirely percentage-based, contributing nothing to a shrink-to-fit computation, since a
+percentage can't resolve without already knowing the size it's a percentage _of_. Net effect: the
+container collapsed to near-zero size instead of filling the available space.
+
+**The actual fix is a small `ResizeObserver`, `contain-size.ts`'s `observeContainSize`** — used
+identically by both `presentation-element.ts` (`#slidesContainer`) and
+`scroll-presentation-element.ts` (`#viewport`), the one other place with the exact same bug
+(`.pptx-scroll-viewport` was `top: 0; left: 0; width: 100%`, no height ceiling, for the same
+reason). Rather than trying to express "contain-fit, whichever axis is binding" as a single CSS
+rule (which turned out to have no reliable non-replaced-element equivalent — see above), it
+toggles between two states that are each individually simple, standard, and unambiguous: the
+default `width: 100%; height: auto` (letting `aspect-ratio`, still set inline as before, derive
+height — identical to the original pre-bug behavior), switching to `width: auto; height: 100%`
+only when that default would actually _overflow_ the host's own available height. Measuring actual
+rendered overflow, rather than comparing the host's and deck's aspect ratios numerically ahead of
+time, is what makes this self-adapt to both cases without needing to know _why_ a host does or
+doesn't have an independent height: a host with no independent height (the traditional
+just-embedded-in-a-page case) always has its own height derived from `.pptx-presentation`'s own
+content, so the two can never disagree — this never switches modes there, exactly preserving
+today's behavior; only a host with a genuinely independent, smaller height (the new full-viewport
+case) can ever trigger it. `:host` also switched to `display: grid; place-items: center` (from
+`display: block`) so the sized-and-toggled child centers itself — letterboxed or pillarboxed as
+needed — instead of sitting flush in a corner whenever it ends up smaller than the host on either
+axis. See `contain-size.ts`'s own doc comment for the full reasoning (including why this needed
+JS at all, given this package's general "no JS resize handling" preference — see the design
+decision above) and `contain-size.test.ts` for coverage of the actual decision logic (`clientHeight`/
+`getBoundingClientRect` are stubbed directly, since `happy-dom` does no real layout).
 
 ## Key design decision: positions computed in JS via CoordinateMap, not composed via nested CSS transforms
 

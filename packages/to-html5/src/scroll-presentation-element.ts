@@ -1,5 +1,6 @@
 import type { Presentation } from '@pptx2html/presentation';
 import type { ShapeFadeAnimation } from './animation.js';
+import { observeContainSize, type ContainSizeController } from './contain-size.js';
 import { resolveScrollTimeline, type ScrollSegment } from './scroll-timeline.js';
 import { renderSlide } from './slide.js';
 import {
@@ -14,7 +15,8 @@ import { UnsupportedFeatureCollector } from './unsupported-features.js';
 
 const STYLES = `
   :host {
-    display: block;
+    display: grid;
+    place-items: center;
     position: relative;
     overflow: hidden;
   }
@@ -29,10 +31,11 @@ const STYLES = `
     width: 100%;
   }
   .pptx-scroll-viewport {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
+    /* Deliberately not position: absolute — as a plain grid item, place-items: center (above)
+       centers it without stretching, and its own width/height (contain-size.ts) size it. Grid
+       items respect z-index without needing position set, unlike ordinary block boxes, so this
+       still stacks correctly under .pptx-scroll-track's own position: absolute + z-index: 1
+       (excluded from grid flow entirely, still covering the full host box via inset: 0). */
     z-index: 0;
   }
 `;
@@ -116,6 +119,7 @@ export class PptxScrollPresentationElement extends HTMLElement {
   readonly #track: HTMLElement;
   readonly #spacer: HTMLElement;
   readonly #viewport: HTMLElement;
+  readonly #containSize: ContainSizeController;
 
   #slideEls: HTMLElement[] = [];
   #segments: readonly ScrollSegment[] = [];
@@ -154,9 +158,15 @@ export class PptxScrollPresentationElement extends HTMLElement {
     shadow.appendChild(this.#track);
 
     this.#track.addEventListener('scroll', this.#handleScroll, { passive: true });
+
+    // See presentation-element.ts's near-identical setup for why this is safe in the constructor
+    // (mutates no attributes) and safe before this element is connected to a document (a zero
+    // measurement is a graceful no-op, not an error) — contain-size.ts has the full mechanism.
+    this.#containSize = observeContainSize(this, this.#viewport);
   }
 
   disconnectedCallback(): void {
+    this.#containSize.disconnect();
     if (this.#rafId !== null) cancelAnimationFrame(this.#rafId);
     this.#rafId = null;
     this.#pendingScrollTop = null;
@@ -202,7 +212,11 @@ export class PptxScrollPresentationElement extends HTMLElement {
       return el;
     });
     this.#viewport.replaceChildren(...this.#slideEls);
+    // `#containSize` (below) only ever toggles which of the viewport's own width/height is the
+    // explicit ("100%") one, trusting this `aspect-ratio` to derive whichever one is left `auto`
+    // — see contain-size.ts for the full mechanism (also used by presentation-element.ts).
     this.#viewport.style.aspectRatio = `${presentation.slideSize.width} / ${presentation.slideSize.height}`;
+    this.#containSize.reapply();
 
     const report = (code: string, message: string, slideIndex: number) =>
       unsupportedFeatures.report({ code, message, slideIndex });
