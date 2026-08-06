@@ -26,6 +26,7 @@ const openErrorLog = document.getElementById('open-error-log');
 const backToPresentation = document.getElementById('back-to-presentation');
 const modeToggle = document.getElementById('mode-toggle');
 const fullscreenButton = document.getElementById('fullscreen-btn');
+const uiToggle = document.getElementById('ui-toggle');
 
 /** Set once a presentation has been chosen — guards direct/back navigation into the other views. */
 let currentFilename: string | undefined;
@@ -186,12 +187,23 @@ function renderCurrent(): void {
   setStatus(`${currentPresentation.slides.length} slide(s). ${navigateHint}`);
 }
 
+// The presentation view's header (back/mode/fullscreen/error-log controls) is hidden by default —
+// only the slide itself is on screen — and appears as a translucent overlay only while this is
+// true. `uiToggle` is the one control left always on screen to get back into it.
+function setUiVisible(visible: boolean): void {
+  presentationView?.classList.toggle('show-ui', visible);
+  uiToggle?.setAttribute('aria-label', visible ? 'Hide controls' : 'Show controls');
+}
+
 async function loadDemo(filename: string): Promise<void> {
   setStatus(`Loading ${filename}…`);
   output?.replaceChildren();
   currentPresentation = undefined;
   currentUnsupportedFeatures = undefined;
   updateErrorBadge();
+  // Every fresh demo starts with only the slide on screen — a leftover open header from whatever
+  // was previously viewed would otherwise carry over onto the new deck.
+  setUiVisible(false);
 
   try {
     const response = await fetch(`demos/${encodeURIComponent(filename)}`);
@@ -229,6 +241,10 @@ openErrorLog?.addEventListener('click', () => navigate('log'));
 backToPresentation?.addEventListener('click', () => navigate('presentation'));
 window.addEventListener('hashchange', syncViewFromHash);
 syncViewFromHash();
+
+uiToggle?.addEventListener('click', () => {
+  setUiVisible(!presentationView?.classList.contains('show-ui'));
+});
 
 modeToggle?.addEventListener('click', () => {
   currentMode = currentMode === 'click' ? 'scroll' : 'click';

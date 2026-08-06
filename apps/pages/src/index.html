@@ -142,13 +142,16 @@
         color: #777;
       }
 
-      /* The presentation view fills the whole screen edge-to-edge — its header floats as a
+      /* The presentation view fills the whole screen edge-to-edge. Its header floats as a
          translucent overlay (not in document flow, unlike the other two views' headers) so it
-         doesn't shrink the presentation's own screen space. */
+         never shrinks the presentation's own screen space — but unlike those other headers it's
+         hidden by default and only appears once the bars button below is tapped, so nothing but
+         the slide itself is on screen normally. */
       #view-presentation {
         position: relative;
       }
       #view-presentation .view-header {
+        display: none;
         position: absolute;
         top: 0;
         left: 0;
@@ -157,10 +160,39 @@
         background: rgba(255, 255, 255, 0.85);
         backdrop-filter: blur(6px);
       }
+      #view-presentation.show-ui .view-header {
+        display: flex;
+      }
       #view-presentation .view-body {
         padding: 0;
         overflow: hidden;
         position: relative;
+      }
+
+      /* The one control left always on screen — everything else lives behind it in the header
+         overlay above. Positioned in the corner least likely to sit over slide content, and kept
+         small/translucent so it reads as chrome rather than part of the deck. */
+      .ui-toggle-button {
+        position: absolute;
+        bottom: calc(1rem + env(safe-area-inset-bottom));
+        right: calc(1rem + env(safe-area-inset-right));
+        z-index: 3;
+        width: 2.75rem;
+        height: 2.75rem;
+        border: none;
+        border-radius: 999px;
+        background: rgba(0, 0, 0, 0.55);
+        color: #fff;
+        font-size: 1.2rem;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        backdrop-filter: blur(6px);
+      }
+      .ui-toggle-button:active {
+        background: rgba(0, 0, 0, 0.75);
       }
 
       .header-titles {
@@ -264,6 +296,9 @@
         <div class="view-body">
           <div id="output" class="presentation-container"></div>
         </div>
+        <button id="ui-toggle" class="ui-toggle-button" type="button" aria-label="Show controls">
+          ☰
+        </button>
       </section>
 
       <section id="view-log" class="view" hidden>
