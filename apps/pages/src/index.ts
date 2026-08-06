@@ -1,7 +1,11 @@
 import type { Presentation } from '@pptx2html/presentation';
 import { readPresentation } from '@pptx2html/reader';
 import type { UnsupportedFeature, UnsupportedFeatureCollector } from '@pptx2html/to-html5';
-import { renderPresentation, renderScrollPresentation } from '@pptx2html/to-html5';
+import {
+  renderPresentation,
+  renderScrollPresentation,
+  resolvePresentationBackgroundCss,
+} from '@pptx2html/to-html5';
 
 //
 
@@ -48,6 +52,17 @@ function setStatus(message: string): void {
 // hash-less default) purely so the device/browser back gesture — the mobile-native way to move
 // between screens — does the right thing for free.
 function showView(view: ViewName): void {
+  // Leaving the presentation view while it's still the fullscreened element would otherwise just
+  // hide it (`hidden` below, i.e. display: none) without ever exiting fullscreen — the browser
+  // keeps treating it as the active fullscreen element even though nothing renders there anymore,
+  // which blocks pointer events from reaching anything else on the page (chooser, error log)
+  // instead of just going dark. Only the dedicated fullscreen button called `exitFullscreen`
+  // before; doing it here instead covers every way of leaving this view — the back button,
+  // opening the error log, and the browser's own back/forward gesture (routed through here via
+  // `syncViewFromHash`) — not just that one button.
+  if (document.fullscreenElement === presentationView && view !== 'presentation') {
+    void document.exitFullscreen();
+  }
   if (chooserView) chooserView.hidden = view !== 'chooser';
   if (presentationView) presentationView.hidden = view !== 'presentation';
   if (logView) logView.hidden = view !== 'log';
@@ -183,6 +198,17 @@ async function loadDemo(filename: string): Promise<void> {
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const buffer = await response.arrayBuffer();
     currentPresentation = readPresentation(new Uint8Array(buffer));
+    // Paints #view-presentation itself (not just #output) with the deck's own resolved
+    // background — this is what shows in the letterboxing/pillarboxing space around the deck and,
+    // notably, in fullscreen mode, where a fullscreened element with no background of its own
+    // falls back to the browser's UA default (black) rather than anything CSS in this file sets.
+    // Deliberately not a transparent/CSS-only default: a presentation genuinely has its own
+    // background (falling back through layout/master, defaulting to white), and this view should
+    // show it consistently whether fullscreen or not.
+    if (presentationView) {
+      presentationView.style.backgroundColor =
+        resolvePresentationBackgroundCss(currentPresentation);
+    }
     renderCurrent();
   } catch (error) {
     console.error(error);
