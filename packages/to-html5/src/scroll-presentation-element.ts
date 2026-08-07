@@ -32,10 +32,18 @@ const STYLES = `
   }
   .pptx-scroll-viewport {
     /* Deliberately not position: absolute — as a plain grid item, place-items: center (above)
-       centers it without stretching, and its own width/height (contain-size.ts) size it. Grid
-       items respect z-index without needing position set, unlike ordinary block boxes, so this
-       still stacks correctly under .pptx-scroll-track's own position: absolute + z-index: 1
-       (excluded from grid flow entirely, still covering the full host box via inset: 0). */
+       centers it without stretching, and its own width/height (contain-size.ts) size it.
+       position: relative (not the default static) is required, though, so *this* box — not
+       :host's own full, unletterboxed area — is the containing block each .pptx-slide resolves
+       its position: absolute/width: 100% against (see render()'s per-slide styling below); see
+       the "Bug, a later session still" paragraph under "Key design decision: every element's
+       position is a CSS percentage of the slide" in this package's CLAUDE.md for the bug this
+       fixes. z-index still applies (stacking this under
+       .pptx-scroll-track's own position: absolute + z-index: 1, which sits on top to keep
+       capturing scroll input) now via the ordinary position + z-index stacking-context rule
+       rather than the grid-item exemption a fully static box would have relied on instead. */
+    position: relative;
+    overflow: hidden;
     z-index: 0;
   }
 `;
@@ -120,6 +128,7 @@ export class PptxScrollPresentationElement extends HTMLElement {
   readonly #spacer: HTMLElement;
   readonly #viewport: HTMLElement;
   readonly #containSize: ContainSizeController;
+  readonly #trackResize: ResizeObserver;
 
   #slideEls: HTMLElement[] = [];
   #segments: readonly ScrollSegment[] = [];
@@ -163,10 +172,23 @@ export class PptxScrollPresentationElement extends HTMLElement {
     // (mutates no attributes) and safe before this element is connected to a document (a zero
     // measurement is a graceful no-op, not an error) — contain-size.ts has the full mechanism.
     this.#containSize = observeContainSize(this, this.#viewport);
+
+    // #applyTrackHeight (below) needs #track's own clientHeight, which is 0 until this element is
+    // actually connected and laid out — `render()` (the public API) is routinely called on a
+    // still-disconnected element (see index.ts's renderScrollPresentation: .render() runs before
+    // the caller ever appends the returned element anywhere), so relying on render()'s own call
+    // alone would silently bake in a 0-height reading forever. A dedicated ResizeObserver on `this`
+    // — the same "self-correcting once connected" trick contain-size.ts already relies on for
+    // #viewport's own sizing — re-derives the spacer height once #track's real box is known, and
+    // again on every subsequent resize (the reachable scroll range depends on the host's own
+    // height, so it must track it live, not just once).
+    this.#trackResize = new ResizeObserver(() => this.#applyTrackHeight());
+    this.#trackResize.observe(this);
   }
 
   disconnectedCallback(): void {
     this.#containSize.disconnect();
+    this.#trackResize.disconnect();
     if (this.#rafId !== null) cancelAnimationFrame(this.#rafId);
     this.#rafId = null;
     this.#pendingScrollTop = null;
@@ -266,9 +288,24 @@ export class PptxScrollPresentationElement extends HTMLElement {
     if (state.kind === 'transition') {
       this.#applyVisibility(new Set([state.segment.slideIndex - 1, state.segment.slideIndex]));
       const anims = this.#transitionAnimations.get(state.segment.slideIndex);
-      if (anims) this.#scrubTransition(anims, state.elapsedMs);
+      if (anims) this.#scrubTransition(state.segment.slideIndex, anims, state.elapsedMs);
     } else {
       this.#applyVisibility(new Set([state.segment.slideIndex]));
+      // This slide's own arrival (if it has one — the first slide never does) needs settling to
+      // its fully-arrived resting frame, not just left wherever the last transition-window seekTo
+      // call happened to leave it — see #claimTransitionAnimation's own doc comment for why a
+      // stale value here is a real, reachable bug (not just a hypothetical), and why "settle to a
+      // fixed value" needs the exact same claim-then-assign treatment as an in-progress scrub.
+      const settleAnims = this.#transitionAnimations.get(state.segment.slideIndex);
+      if (settleAnims && settleAnims.kind !== 'morph' && state.segment.transition) {
+        const settledMs = state.segment.transition.endMs - state.segment.transition.startMs;
+        this.#claimTransitionAnimation(
+          state.segment.slideIndex,
+          'incoming',
+          settleAnims.incoming,
+          settledMs,
+        );
+      }
       const fadeAnims = this.#contentAnimations.get(state.segment.slideIndex) ?? [];
       state.segment.content.fades.forEach((fade, index) => {
         const animation = fadeAnims[index];
@@ -287,7 +324,11 @@ export class PptxScrollPresentationElement extends HTMLElement {
     });
   }
 
-  #scrubTransition(anims: TransitionAnimations, elapsedMs: number): void {
+  #scrubTransition(
+    segmentIndex: number,
+    anims: TransitionAnimations,
+    elapsedMs: number,
+  ): void {
     if (anims.kind === 'morph') {
       for (const { arrivingAnimation, departingEl } of anims.matched) {
         arrivingAnimation.currentTime = elapsedMs;
@@ -301,8 +342,67 @@ export class PptxScrollPresentationElement extends HTMLElement {
       for (const animation of anims.fadeIn) animation.currentTime = elapsedMs;
       return;
     }
-    anims.outgoing.currentTime = elapsedMs;
-    anims.incoming.currentTime = elapsedMs;
+    this.#claimTransitionAnimation(segmentIndex, 'outgoing', anims.outgoing, elapsedMs);
+    this.#claimTransitionAnimation(segmentIndex, 'incoming', anims.incoming, elapsedMs);
+  }
+
+  /**
+   * A push/fade `.pptx-slide` participates in *two* transitions across the deck's whole lifetime —
+   * every slide but the first is some segment's `incoming` target, and every slide but the last is
+   * the *next* segment's `outgoing` source — and `render()` builds every segment's pair of
+   * `Animation`s up front, all at once, all permanently `fill: 'both'` (see the class doc comment
+   * on why: nothing here is ever re-`.animate()`'d, only scrubbed). That means a "middle" slide
+   * genuinely has two separate, simultaneously-alive `Animation` objects targeting the exact same
+   * element and CSS property (`transform` for push, `opacity` for fade) — one from its own
+   * incoming transition, one from the next slide's outgoing transition off the same element — for
+   * the deck's *entire* timeline, not just while each is nominally "active."
+   *
+   * **Bug this fixes, found via a real deck (`portrait-slides.pptx`, three slides, push
+   * throughout): the *first* transition rendered as a hard cut instead of a push.** Web
+   * Animations' default `composite: 'replace'` lets only the *more recently created* effect win
+   * outright for a shared target+property — verified empirically (not just read off the spec),
+   * since the ordering isn't obvious from the API surface alone. Segments are built in slide order
+   * in `render()`'s loop, so segment *i+1*'s `outgoing` (targeting slide *i*) is always created
+   * *after* segment *i*'s own `incoming` (also targeting slide *i*) — meaning the *later* transition
+   * permanently wins the paint for that slide, regardless of which one `seekTo` actually wants
+   * active *right now*. A three-slide deck's middle slide is the one slide that's both kinds of
+   * target, so its own arrival (segment 1's `incoming`) was being silently painted over by segment
+   * 2's `outgoing` — sitting paused at its own first keyframe (identity/full-opacity) the entire
+   * time, which is exactly what an unanimated hard cut looks like. The *last* slide's arrival has
+   * no such conflict (there's no further segment to build a competing `outgoing` off it), which is
+   * why only the earlier transition(s), not the final one, showed the bug.
+   *
+   * **The fix: `cancel()` the conflicting sibling immediately before (re-)asserting the animation
+   * that should actually be governing right now.** `cancel()` fully removes an effect from its
+   * target's composite stack (unlike merely leaving its `currentTime` alone, which keeps it
+   * "in effect" and contributing); reassigning `currentTime` afterward reliably "resurrects" a
+   * cancelled `Animation` back to the *top* of that stack — verified empirically against a real
+   * `Element.animate()` implementation, not assumed from the spec's prose. Cancelling and
+   * resurrecting on every `seekTo` call (not just the first time a transition becomes active) is
+   * deliberate and cheap: `cancel()` on an already-idle `Animation` is a documented no-op, and this
+   * only ever runs once per animation frame (already rAF-coalesced — see `#flushScroll`).
+   */
+  #claimTransitionAnimation(
+    segmentIndex: number,
+    role: 'outgoing' | 'incoming',
+    animation: Animation,
+    currentTimeMs: number,
+  ): void {
+    this.#conflictingAnimation(segmentIndex, role)?.cancel();
+    animation.currentTime = currentTimeMs;
+  }
+
+  /** The sibling push/fade `Animation` (if any) that targets the exact same `.pptx-slide` element
+   *  as `segmentIndex`'s own `role` — see `#claimTransitionAnimation`'s doc comment for why one
+   *  can exist at all, and why it needs actively neutralizing rather than just ignoring. */
+  #conflictingAnimation(
+    segmentIndex: number,
+    role: 'outgoing' | 'incoming',
+  ): Animation | undefined {
+    const siblingIndex = role === 'incoming' ? segmentIndex + 1 : segmentIndex - 1;
+    const sibling = this.#transitionAnimations.get(siblingIndex);
+    if (!sibling || sibling.kind === 'morph') return undefined;
+    return role === 'incoming' ? sibling.outgoing : sibling.incoming;
   }
 
   #buildTransitionAnimations(segment: ScrollSegment): TransitionAnimations {
@@ -390,9 +490,25 @@ export class PptxScrollPresentationElement extends HTMLElement {
     return animation;
   }
 
+  /**
+   * **Bug this fixes, found via the same `portrait-slides.pptx` deck as
+   * `#claimTransitionAnimation`'s: the final slide's own arrival never finished, always caught
+   * mid-push, however far the user scrolled.** `.pptx-scroll-track` (`overflow-y: auto`) can only
+   * ever be scrolled to `spacer.scrollHeight - track.clientHeight` — CSS's own scrollable-range
+   * definition, not something this file controls — so sizing the spacer to exactly
+   * `totalDurationMs * pixelsPerMs` (no other term) left the *reachable* maximum short by exactly
+   * one screen's worth: `totalDurationMs * pixelsPerMs - track.clientHeight`, not
+   * `totalDurationMs * pixelsPerMs` itself. `seekTo`'s own `ms = scrollTop / pixelsPerMs`
+   * conversion has no way to know about that shortfall, so the deck's own final millisecond — and
+   * with it, the last slide's own transition-in fully settling — was simply unreachable by
+   * scrolling to the bottom of the page. Padding the spacer by the track's own `clientHeight`
+   * closes the gap: max `scrollTop` then equals `totalDurationMs * pixelsPerMs` exactly, matching
+   * `seekTo`'s conversion 1:1.
+   */
   #applyTrackHeight(): void {
     const pixelsPerMs = this.#pixelsPerSecond / 1000;
-    this.#spacer.style.height = `${this.#totalDurationMs * pixelsPerMs}px`;
+    const contentHeightPx = this.#totalDurationMs * pixelsPerMs;
+    this.#spacer.style.height = `${contentHeightPx + this.#track.clientHeight}px`;
   }
 
   #cancelAllAnimations(): void {

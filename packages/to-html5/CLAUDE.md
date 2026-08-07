@@ -74,6 +74,63 @@ the full mechanism, and `docs/scroll-driven-playback.md` for how this differs fr
 original framing (notably: no "is this deck fully time-resolved" gate at all — see that design
 decision for why).
 
+## Hard requirement: `<pptx-presentation>`/`<pptx-scroll-presentation>` are opaque, self-sizing boxes, controlled only via their JS API
+
+Stated explicitly by the user, not derived from code — binding on every future change to either
+element, not just layout/sizing ones:
+
+1. **The client only ever resizes the *host* element** (whatever CSS box it gives
+   `<pptx-presentation>`/`<pptx-scroll-presentation>` from outside — fixed viewport, intrinsic,
+   `max-width`, anything). Everything inside the shadow root is this package's own responsibility,
+   including sizing itself correctly — letterboxed/pillarboxed — to whatever box it's actually been
+   given (`contain-size.ts`, see the design decision above). The client never reaches in via CSS or
+   DOM to influence internals; the only surface it controls the presentation through is the JS/TS
+   API (`.next()`/`.previous()`/`.goToSlide()`, or scroll position for the scroll element). Anything
+   that leaks a layout/sizing dependency across that boundary, in *either* direction, is a bug —
+   not a rendering nit to fix "when convenient." The scroll-mode letterbox/pillarbox bug fixed a
+   later session (documented under "Key design decision: every element's position is a CSS
+   percentage of the slide" above) was exactly this: internal content stopped respecting the
+   letterboxed size `contain-size.ts` had computed for it and fell back to the host's raw,
+   unletterboxed box instead — a violation of this rule even though nothing about the *client-facing*
+   contract itself changed.
+2. **`<pptx-presentation>` and `<pptx-scroll-presentation>` must render visually identically**,
+   except for whatever scrollytelling genuinely requires — the scroll-capture track intercepting
+   input, scrubbing an `Animation`'s `currentTime` instead of firing-and-forgetting it in real time,
+   and the synthetic default-transition fallback scroll mode substitutes for an undecorated slide
+   (see "Key design decision: scroll-driven playback" below). Any other visual divergence between
+   the two — including, but not limited to, sizing/letterboxing behavior — is a bug.
+3. **Nothing rendered inside either element may visually escape its own host box.** Whatever
+   content the deck contains — a mid-transition slide sliding past its own edge, a rotated/oversized
+   shape, a native scrollbar affordance — must clip at the boundary the client gave the element, not
+   bleed into the surrounding page. Concretely, this is a chain of `overflow: hidden` three levels
+   deep, present identically in both elements: `:host` itself, the letterboxed/pillarboxed container
+   `contain-size.ts` sizes (`.pptx-presentation` / `.pptx-scroll-viewport`), and each individual
+   `.pptx-slide` (`slide.ts`). Any new layer of content (a future effect, a future transition kind)
+   needs to stay inside that chain, not introduce a new escape hatch (a `overflow: visible` ancestor,
+   an unclipped `position: fixed`, a box-shadow/filter with unbounded spread, etc.).
+
+Audited against both current elements after the scroll-mode letterbox fix above (this session):
+client-facing CSS in both `apps/web-demo` and `apps/pages` only ever sizes the *host* element
+(`#output > * { width: 100%; height: 100% }` / `.presentation-container > * { width: 100%; height:
+100% }` — generic, shadow-DOM-structure-agnostic) and neither app's JS reaches into either
+element's internals (no `shadowRoot`/`::part`/class-name access from outside) — rule 1 holds.
+`.pptx-scroll-track`'s `z-index: 1` over `.pptx-scroll-viewport`'s `z-index: 0` (both establishing
+their own stacking context, `:host` being `position: relative`) correctly keeps input-capture on top
+without the track's own `inset: 0` box ever exceeding `:host`'s own box — rule 3 holds for that
+layer. `contain-size.ts`'s own width/height-toggle-plus-inline-`aspect-ratio` sizing of the
+letterboxed container doesn't depend on its children's positioning scheme either way (CSS resolves
+the auto dimension from the explicit one via the container's own `aspect-ratio` whenever either
+`width` or `height` is definite, regardless of whether children are in normal flow or
+`position: absolute`) — so this class of bug is specifically about a *child's* containing-block
+reference, not about the outer sizing mechanism itself, which was never at risk. **Not exercised by
+this pass**: `happy-dom` (this package's whole test environment) performs no real layout at all, so
+none of the above can be asserted by an automated test today — it was checked by reading the
+resolved CSS/cascade rules against real user-agent behavior, not by running anything. A real-browser
+(e.g. Playwright) regression suite asserting on actual `getBoundingClientRect()`s — nothing exceeds
+`:host`'s own rect, click/scroll produce identical rects for the same deck — would close that gap;
+not introduced this session (no such tooling exists in this repo yet, and adding one is a real
+infrastructure decision, not a drive-by).
+
 ## Layout
 
 **Note**: the OOXML inheritance-walking logic this section used to describe here —
@@ -346,6 +403,32 @@ axis. See `contain-size.ts`'s own doc comment for the full reasoning (including 
 JS at all, given this package's general "no JS resize handling" preference — see the design
 decision above) and `contain-size.test.ts` for coverage of the actual decision logic (`clientHeight`/
 `getBoundingClientRect` are stubbed directly, since `happy-dom` does no real layout).
+
+**Bug, a later session still: switching `.pptx-scroll-viewport` off literal `position: absolute`
+(the fix directly above) left it `position: static`, silently breaking letterbox/pillarbox sizing
+in scroll mode only.** `#containSize`'s width/height toggling (above) only ever resizes
+`.pptx-scroll-viewport` itself — it was never the thing actually painted; every `.pptx-slide` is a
+separate `position: absolute; top: 0; left: 0; width: 100%` child of it (`render()`, since scroll
+mode keeps every slide permanently stacked rather than showing one in normal flow — see "Key design
+decision: scroll-driven playback" below). An absolutely positioned box's `top`/`left`/percentage
+`width` resolve against its nearest ancestor whose own `position` isn't `static` — with
+`.pptx-scroll-viewport` left fully static (no `position` declared at all) after the fix above, that
+ancestor was `:host` (the *unletterboxed*, full host box; `:host` itself is `position: relative`),
+not `.pptx-scroll-viewport` (the correctly contain-sized, letterboxed/pillarboxed one) — so every
+slide always rendered at the host's own full, unconstrained width/aspect ratio, completely ignoring
+whatever `#containSize` had actually computed. `PptxPresentationElement`'s equivalent target,
+`.pptx-presentation` (`#slidesContainer`), never had this problem: it kept `position: relative` the
+whole time (its active slide is an ordinary normal-flow child, not `position: absolute`, except
+transiently mid-transition — see "Key design decision: all slides render into the DOM up front"
+below — so it was never at risk of losing its own containing-block role the way the scroll-mode fix
+above accidentally did). The fix: `.pptx-scroll-viewport` gets `position: relative` (not
+`absolute` — that would reintroduce the original bug the commit above fixed, forcing it back to
+`top: 0; left: 0; width: 100%` and fighting `#containSize`'s own toggled width/height) plus
+`overflow: hidden`, matching `.pptx-presentation`'s own pair exactly, so a mid-transition
+`transform`-translated slide clips at the *letterboxed* box's own edge rather than bleeding into the
+letterbox/pillarbox bars on its way past. `contain-size.test.ts`/`scroll-presentation-element.test.ts`
+don't catch this class of bug at all — `happy-dom` performs no real layout, so a containing-block
+mistake like this one only ever surfaces visually, in a real browser.
 
 ## Key design decision: positions computed in JS via CoordinateMap, not composed via nested CSS transforms
 
@@ -968,14 +1051,20 @@ must give `<pptx-scroll-presentation>` an explicit box (e.g. `height: 100vh`) an
 inside another scrollable ancestor, since this element assumes it owns the one scroll region
 involved — but now it holds nothing but `.pptx-scroll-spacer`, a plain in-flow div whose only job is
 to _be_ the scroll distance (`height: totalDurationMs * pixelsPerSecond / 1000`), no visible content
-at all. Both `.pptx-scroll-track` and `.pptx-scroll-viewport` are `position: absolute` against
-`:host` (now `position: relative` for exactly this), sized to cover the same box — the track sits on
-top (`z-index: 1`) purely so it keeps hit-testing scroll/wheel/touch gestures anywhere over the
-visible area (wheel/touch scroll delegation only walks up the ancestor chain from whatever's hit,
-never sideways to a sibling, so it has to be topmost to receive them) — a known trade-off, since it
-also means the track captures clicks; harmless today since nothing this package renders is
-interactive, but would need revisiting if that changes. `.pptx-scroll-viewport` holds every rendered
-slide permanently stacked underneath it (unlike `PptxPresentationElement`, which only goes
+at all. **`:host` is `position: relative` for exactly this** — `.pptx-scroll-track` is
+`position: absolute` against it, covering the same full box (`inset: 0`), and sits on top
+(`z-index: 1`) purely so it keeps hit-testing scroll/wheel/touch gestures anywhere over the visible
+area (wheel/touch scroll delegation only walks up the ancestor chain from whatever's hit, never
+sideways to a sibling, so it has to be topmost to receive them) — a known trade-off, since it also
+means the track captures clicks; harmless today since nothing this package renders is interactive,
+but would need revisiting if that changes. (An earlier draft of this paragraph, since corrected,
+described `.pptx-scroll-viewport` the same way — a later "Sizing fix" session moved it off literal
+`position: absolute` covering the full host box and onto `position: relative` plus
+`#containSize`-driven width/height instead, so it's letterboxed/pillarboxed rather than always
+covering the same full box as the track; see the "Bug, a later session still" paragraph under "Key
+design decision: every element's position is a CSS percentage of the slide" above for why it still
+needs to be a positioned ancestor at all.) `.pptx-scroll-viewport` holds every rendered slide
+permanently stacked underneath it (unlike `PptxPresentationElement`, which only goes
 `position: absolute` transiently during a transition, this element has no single-slide "normal flow"
 state to return to).
 
@@ -997,6 +1086,69 @@ document's own WAAPI-migration rationale already pointed toward); scroll-snap-to
 `Slide.timing` behavior beyond the fade-on-whole-shape coverage real-time mode already has — scroll
 mode inherits exactly that coverage via the unchanged `collectFadeAnimations`, not a new animation
 pass.
+
+## Key design decision: two behavioral scroll-mode bugs found via `portrait-slides.pptx` (a real, simple push-only deck)
+
+Both were caught only by actually driving the rendered element in a real Chromium (via a throwaway
+Playwright script — `happy-dom` implements no real layout and no real Web Animations composite
+semantics, so neither bug is visible to this package's own test suite without one). Both are fixed
+now, with regression tests (`scroll-presentation-element.test.ts`) covering what a unit test *can*
+assert about each — but real-browser verification was what actually found and confirmed both, not
+reasoning about the code alone; see the two doc comments below for the mechanism, this section for
+the narrative.
+
+**Bug 1 — the last slide's own arrival never finished, however far the user scrolled: `#applyTrackHeight`
+sized the spacer to exactly `totalDurationMs * pixelsPerMs`, but CSS's own scrollable range is
+`spacer.scrollHeight - track.clientHeight`, not the spacer's height alone.** The reachable maximum
+`ms` therefore fell short of the deck's own `totalDurationMs` by exactly one screen's worth,
+unreachable no matter how far the user scrolled — landing the final transition (and the deck's last
+slide) permanently mid-flight, which read as "cropped." Fixed by padding the spacer with
+`#track`'s own `clientHeight` — see `#applyTrackHeight`'s own doc comment for the exact mechanism,
+and its constructor-time `ResizeObserver` (new, `#trackResize`) for why a one-time fix in `render()`
+alone isn't enough: `render()` is routinely called on a still-disconnected element (`index.ts`'s
+`renderScrollPresentation` — see both `apps/web-demo` and `apps/pages`'s call sites, neither appends
+the returned element before calling `.render()`), so `#track.clientHeight` reads `0` at that exact
+moment — the same timing hazard `contain-size.ts` already solves for `#viewport`'s own sizing, via
+the identical "dedicated `ResizeObserver`, self-corrects once actually connected and laid out" fix.
+
+**Bug 2 — the deck's first transition rendered as a hard cut instead of a push, though later ones
+looked correct: a "middle" slide's own arrival animation was permanently shadowed by the *next*
+slide's departure animation, both `fill: 'both'` and both targeting the exact same element+property
+for the deck's entire lifetime.** Every slide but the first is some segment's `incoming` target, and
+every slide but the last is the *next* segment's `outgoing` source — `render()` builds every
+segment's animations once, up front, so a middle slide ends up with two *simultaneously alive* WAAPI
+`Animation`s on the same target+property (`transform` for push, `opacity` for fade). Web Animations'
+default `composite: 'replace'` lets only the *more recently created* effect win outright for a
+shared target+property (verified empirically against a real `Element.animate()`, not just read off
+the spec — ordering isn't obvious from the API surface alone) — and since segments build in slide
+order, the *next* segment's `outgoing` (built after the *current* segment's `incoming`, same target)
+always wins, regardless of which one `seekTo` actually wants active right now. A 3-slide deck's
+single middle slide is the only slide that's both kinds of target, which is why only its own
+arrival (the deck's first transition) showed the bug — the last slide's arrival has no later segment
+competing for the same element, so it wasn't shadowed at all, and looked fine. Fixed by
+`#claimTransitionAnimation`/`#conflictingAnimation` (new): `cancel()` the conflicting sibling
+immediately before (re-)asserting the animation that should actually govern, both while scrubbing a
+transition in progress (`#scrubTransition`) and while *settling* a slide's own arrival once its
+transition window ends (new — `seekTo`'s content-phase branch now explicitly pins the incoming
+animation to its full settled duration, rather than leaving it wherever the last transition-window
+`seekTo` call happened to leave it, which is itself a related, narrower bug this same fix closes:
+without it, a fast scroll that skips clean over a transition's boundary in one frame — plausible any
+time `pixelsPerSecond`'s scroll-distance-per-transition is smaller than a single wheel/trackpad
+delta — could leave a slide visibly offset from its own resting position indefinitely, until scrubbed
+back through that transition again). `cancel()` reliably removes an effect from its target's
+composite stack, and reassigning `currentTime` afterward reliably "resurrects" a cancelled
+`Animation` back to the *top* of that stack (also verified empirically) — cheap to do on every
+`seekTo` call (already once-per-frame, rAF-coalesced) since `cancel()` on an already-idle `Animation`
+is a documented no-op. See `#claimTransitionAnimation`'s own doc comment
+(`scroll-presentation-element.ts`) for the full mechanism, including why the *reverse* direction
+(a segment's own `outgoing` vs. the *previous* segment's `incoming` off the same element) needed no
+equivalent fix — creation order already happens to favor the correct one there.
+
+Morph transitions are unaffected by bug 2 — its shape-level `arrivingAnimation`s target individual
+shape elements (`findShapeElement(incoming, ...)`), not the whole `.pptx-slide` div, and a morph
+transition's *departing* side is a raw `opacity` style write (`#scrubTransition`'s morph branch,
+reset every `seekTo` via `#hiddenMorphShapes`), not a competing `Animation` object — so there's no
+second WAAPI effect on the same target+property to conflict with in the first place.
 
 ## Scope boundary — what's intentionally unmodeled (yet)
 

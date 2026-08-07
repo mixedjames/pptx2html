@@ -151,6 +151,65 @@ describe('PptxScrollPresentationElement', () => {
     expect(incomingAnim?.currentTime).toBe(50);
   });
 
+  it('cancels the conflicting sibling animation so a middle slide\'s own arrival is not silently shadowed by the next transition\'s departure off the same element+property', () => {
+    // Regression test for a real bug found via portrait-slides.pptx (3 slides, push throughout):
+    // slide 1 is both segment 1's `incoming` target and segment 2's `outgoing` source, so it ends
+    // up with two permanently fill:'both' Animations targeting its own `transform` — WAAPI's
+    // default composite lets only the more-recently-created one win, which (since segments build
+    // in order) is always segment 2's `outgoing`, silently shadowing segment 1's own arrival for
+    // the deck's entire lifetime, not just while segment 2 is nominally active. See
+    // #claimTransitionAnimation's own doc comment for the full mechanism.
+    const el = newElement();
+    el.render(
+      buildPresentation([
+        undefined,
+        { effect: { kind: 'push', direction: 'r' } },
+        { effect: { kind: 'push', direction: 'l' } },
+      ]),
+    );
+    const [, slide1] = slideEls(el);
+    const slide1Anims = recordedAnimations.filter((r) => r.target === slide1);
+    expect(slide1Anims).toHaveLength(2); // segment 1's incoming + segment 2's outgoing
+
+    const incoming = slide1Anims.find(
+      (r) => JSON.stringify(r.keyframes) === JSON.stringify([
+        { transform: 'translate(-100%, 0)' },
+        { transform: 'translate(0, 0)' },
+      ]),
+    )?.animation;
+    const outgoing = slide1Anims.find(
+      (r) => JSON.stringify(r.keyframes) === JSON.stringify([
+        { transform: 'translate(0, 0)' },
+        { transform: 'translate(-100%, 0)' },
+      ]),
+    )?.animation;
+    expect(incoming).toBeDefined();
+    expect(outgoing).toBeDefined();
+
+    el.seekTo(1400); // 200ms into segment 1's transition — slide 1 is arriving
+    expect(incoming?.currentTime).toBe(200);
+    // The conflicting sibling (segment 2's own departure, not due to start until ms 2800) must be
+    // cancelled — left alive, it would permanently paint over slide 1 with its own first keyframe
+    // (identity), which is exactly what an unanimated "hard cut" looks like.
+    expect(outgoing?.playState).toBe('idle');
+  });
+
+  it("settles a slide's own arrival to its fully-arrived frame once scrubbed into its content phase, even when the transition window itself was never visited", () => {
+    // A fast scroll (a big wheel/trackpad jump, or a direct seekTo) can skip straight from before a
+    // transition's window to after it, without ever calling seekTo with a ms inside that window —
+    // #scrubTransition's own currentTime writes would then never run for it at all, leaving the
+    // Animation exactly wherever it started (currentTime 0, i.e. its *first* keyframe) instead of
+    // its settled, fully-arrived one.
+    const el = newElement();
+    el.render(buildPresentation([undefined, { effect: { kind: 'push', direction: 'r' } }]));
+    const [, slide1] = slideEls(el);
+    const incoming = latestAnimation(slide1!)?.animation; // slide1's only Animation here
+    expect(incoming?.currentTime).toBe(0);
+
+    el.seekTo(2000); // segment 1's own content phase — well past its transition window [1200, 1600)
+    expect(incoming?.currentTime).toBe(400); // settled to the full "fast" (400ms) duration
+  });
+
   it('every Animation is paused immediately after creation, never auto-playing', () => {
     const el = newElement();
     el.render(buildPresentation([undefined, { effect: { kind: 'fade' } }]));
@@ -293,6 +352,20 @@ describe('PptxScrollPresentationElement', () => {
 
       el.pixelsPerSecond = 1200;
       expect(spacer?.style.height).toBe('1440px');
+    });
+
+    it("pads the spacer by the track's own clientHeight, since CSS's scrollable range is spacer.scrollHeight minus that, not the spacer's height alone", () => {
+      // Regression test for a real bug found via portrait-slides.pptx: without this padding, the
+      // deck's own final millisecond of scroll-timeline was never reachable by actually scrolling
+      // to the bottom of the page — short by exactly one screen's worth — so the last slide's own
+      // transition-in was always caught mid-flight, looking cropped, however far the user scrolled.
+      const el = newElement();
+      const track = el.shadowRoot!.querySelector<HTMLElement>('.pptx-scroll-track')!;
+      Object.defineProperty(track, 'clientHeight', { value: 500, configurable: true });
+
+      el.render(buildPresentation([undefined])); // 1200ms dwell, default 600px/s -> 720px content
+      const spacer = el.shadowRoot?.querySelector<HTMLElement>('.pptx-scroll-spacer');
+      expect(spacer?.style.height).toBe('1220px'); // 720px content + 500px track height
     });
   });
 
