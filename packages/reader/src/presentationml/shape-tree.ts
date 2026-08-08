@@ -33,7 +33,12 @@ function parseShapeConnection(node: XmlNode | undefined): ShapeConnection | unde
   return { shapeId, connectionSiteIndex };
 }
 
-function parseStyleMatrixReference(node: XmlNode | undefined): StyleMatrixReference | undefined {
+/** Parses `a:fillRef`/`a:lnRef`/`p:bgRef`'s shared shape (§20.1.4.2.10/2.12, `CT_StyleMatrixReference`)
+ *  — exported for `common-slide-data.ts`'s `p:bgRef` parsing, which needs the exact same shape but
+ *  isn't otherwise shape-tree-related. */
+export function parseStyleMatrixReference(
+  node: XmlNode | undefined,
+): StyleMatrixReference | undefined {
   if (!node) return undefined;
   const index = Number.parseInt(attr(node, 'idx') ?? '', 10);
   const color = parseChildColor(node);

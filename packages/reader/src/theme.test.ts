@@ -83,13 +83,27 @@ describe('parseTheme', () => {
     });
   });
 
-  it('returns empty fill/line style lists when fmtScheme has no fillStyleLst/lnStyleLst', () => {
+  it("parses the fmtScheme's bgFillStyleLst into exactly 3 Fills, in order — the same parser as fillStyleLst", () => {
+    const theme = parseTheme(THEME_XML);
+    expect(theme.formatScheme.bgFillStyles).toHaveLength(3);
+    for (const fill of theme.formatScheme.bgFillStyles) {
+      expect(fill).toMatchObject({ type: 'solid', color: { type: 'scheme', value: 'phClr' } });
+    }
+  });
+
+  it('returns empty fill/line/bg-fill style lists when fmtScheme has no fillStyleLst/lnStyleLst/bgFillStyleLst', () => {
     const theme = parseTheme('<a:theme xmlns:a="a"><a:themeElements/></a:theme>');
     expect(theme.formatScheme.fillStyles).toEqual([]);
     expect(theme.formatScheme.lineStyles).toEqual([]);
+    expect(theme.formatScheme.bgFillStyles).toEqual([]);
   });
 
-  it('emptyTheme also has empty fill/line style lists', () => {
-    expect(emptyTheme().formatScheme).toEqual({ name: '', fillStyles: [], lineStyles: [] });
+  it('emptyTheme also has empty fill/line/bg-fill style lists', () => {
+    expect(emptyTheme().formatScheme).toEqual({
+      name: '',
+      fillStyles: [],
+      lineStyles: [],
+      bgFillStyles: [],
+    });
   });
 });

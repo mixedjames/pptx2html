@@ -324,11 +324,7 @@ export class PptxScrollPresentationElement extends HTMLElement {
     });
   }
 
-  #scrubTransition(
-    segmentIndex: number,
-    anims: TransitionAnimations,
-    elapsedMs: number,
-  ): void {
+  #scrubTransition(segmentIndex: number, anims: TransitionAnimations, elapsedMs: number): void {
     if (anims.kind === 'morph') {
       for (const { arrivingAnimation, departingEl } of anims.matched) {
         arrivingAnimation.currentTime = elapsedMs;

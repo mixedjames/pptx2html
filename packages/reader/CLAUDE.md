@@ -22,11 +22,25 @@ a slide master's `txStyles` (title/body/other), and the presentation's own
 (shared across all four, since they're structurally identical — §21.1.2.4.12's
 `lvl1pPr`..`lvl9pPr`) and its own `parseSharedParagraphProperties` helper (shared in turn
 with `a:pPr` parsing, since a `lvlNpPr` is itself structurally a full paragraph-properties
-element). A theme's `fmtScheme` fill/line style matrices (`fillStyleLst`/`lnStyleLst`) are
-parsed too (`theme.ts`, reusing `drawingml/fill.ts`'s/`line.ts`'s own parsers), along with a
-shape/picture/connector's `p:style` `fillRef`/`lnRef` (`presentationml/shape-tree.ts`'s
-`parseShapeStyle`) — together these resolve the fill/line PowerPoint's Shape Styles gallery
-writes by default (a bare style reference, no explicit `spPr` fill/line at all). A shape's
+element). A theme's `fmtScheme` fill/line/background-fill style matrices (`fillStyleLst`/
+`lnStyleLst`/`bgFillStyleLst`) are parsed too (`theme.ts`, reusing `drawingml/fill.ts`'s/
+`line.ts`'s own parsers — `bgFillStyleLst` is structurally just another fill list, same parser as
+`fillStyleLst`), along with a shape/picture/connector's `p:style` `fillRef`/`lnRef`
+(`presentationml/shape-tree.ts`'s `parseShapeStyle`) — together these resolve the fill/line
+PowerPoint's Shape Styles gallery writes by default (a bare style reference, no explicit `spPr`
+fill/line at all). **A slide/layout/master's own `p:bg/p:bgRef` (§19.3.1.6, new — a later
+session) is now parsed too**, into `CommonSlideData.backgroundRef` (`presentationml/
+common-slide-data.ts`'s `parseBackground`, reusing `shape-tree.ts`'s `parseStyleMatrixReference`
+— exported from there for exactly this, since it's the same `CT_StyleMatrixReference` shape
+`fillRef`/`lnRef` already parse) — previously only `p:bgPr` (a literal fill) was read at all,
+silently dropping `p:bgRef` (a reference to the theme's own default background) as "unmodeled for
+the skeleton." A real deck caught the gap: any slide/layout/master relying on the theme's own
+background — PowerPoint's own default whenever nothing's been explicitly picked, not a rare
+authoring choice — parsed as having no background anywhere in its own chain at all, which
+`@pptx2html/to-html5` then rendered as no CSS background whatsoever, letting whatever sits behind
+the slide show through instead. See `packages/presentation/CLAUDE.md`'s own note on this (`resolve/
+background.ts`'s `resolveEffectiveBackground`, `resolve/style-matrix.ts`'s new
+`resolveBackgroundStyleFill`) for the resolution side. A shape's
 `a:custGeom` freeform outline (§20.1.9.8) is now parsed too — `drawingml/geometry.ts`'s `parsePath`/
 `parsePathCommand`, new — into `CustomGeometry.pathLst`, for the "every point is a literal
 coordinate" case (see the scope boundary below). A blip's
@@ -128,7 +142,7 @@ two-phase order intact.
 ## Scope boundary
 
 Anywhere `packages/presentation` says "unmodeled" (chart/smartArt/
-oleObject internals, table style matrices, `effectStyleLst`/`bgFillStyleLst`, `p:style`'s
+oleObject internals, table style matrices, `effectStyleLst`, `p:style`'s
 `effectRef`, theme overrides, custom shows, path gradients), the reader simply
 never reads that XML — it doesn't parse-then-discard. `custGeom` path data (`drawingml/geometry.ts`'s
 `parsePath`/`parsePathCommand`, new — a later session) is now parsed into `CustomGeometryPath`/

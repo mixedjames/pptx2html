@@ -73,3 +73,21 @@ export function resolveStyleLine(
   if (!style) return undefined;
   return style.fill ? { ...style, fill: substituteFill(style.fill, ref.color) } : style;
 }
+
+/**
+ * `resolveStyleFill`'s `p:bg/p:bgRef` (§19.3.1.6) equivalent, against `FormatScheme.bgFillStyles`
+ * — a slide/layout/master's own background, when authored as a reference to the theme's default
+ * rather than a directly-picked fill (see `CommonSlideData.backgroundRef`'s own doc comment for
+ * why this is a separate field/resolver rather than folding into `resolveStyleFill`). The only
+ * real difference from `resolveStyleFill`: `idx`'s numbering convention is offset by 1000 for a
+ * background reference specifically (§20.1.4.2.10's own `ST_StyleMatrixColumnIndex` — 1–999
+ * selects `fillStyleLst`, 1001+ selects `bgFillStyleLst`, with 1001 being that list's first entry)
+ * — a real deck's own `p:bgRef idx="1001"` is exactly this, not an off-by-one.
+ */
+export function resolveBackgroundStyleFill(
+  ref: StyleMatrixReference | undefined,
+  formatScheme: FormatScheme | undefined,
+): Fill | undefined {
+  const style = ref && formatScheme?.bgFillStyles[ref.index - 1001];
+  return style ? substituteFill(style, ref.color) : undefined;
+}

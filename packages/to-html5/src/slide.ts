@@ -35,7 +35,7 @@ export function renderSlide(
   el.style.setProperty('container-type', 'inline-size');
 
   const background = resolveEffectiveBackground(slide);
-  if (background) applyFill(el, background.fill, slide.layout.master.theme.colorScheme);
+  if (background) applyFill(el, background, slide.layout.master.theme.colorScheme);
 
   const context: RenderContext = {
     slideSize,

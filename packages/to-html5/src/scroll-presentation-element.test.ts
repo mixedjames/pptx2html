@@ -110,11 +110,13 @@ describe('PptxScrollPresentationElement', () => {
   it("seekTo during a static slide's content phase keeps only that slide visible", () => {
     const el = newElement();
     el.render(buildPresentation([undefined, { effect: { kind: 'fade' } }, undefined]));
-    // Segment 0 content: [0, 1200); segment 1 transition: [1200, 1600); segment 1 content:
-    // [1600, 2800); segment 2 transition: [2800, 3200); segment 2 content: [3200, 4400).
+    // No build animations anywhere in this deck, so every content phase is zero-width (see
+    // scroll-timeline.ts's DEFAULT_MIN_DWELL_MS) — segment 0 content: [0, 0); segment 1 transition:
+    // [0, 400); segment 1 content: [400, 400); segment 2 transition: [400, 800); segment 2 content:
+    // [800, 800).
     const [slide0, slide1, slide2] = slideEls(el);
 
-    el.seekTo(2000); // slide 1's own content phase
+    el.seekTo(400); // slide 1's own (zero-width) content phase
     expect(slide0?.style.display).toBe('none');
     expect(slide1?.style.display).toBe('block');
     expect(slide2?.style.display).toBe('none');
@@ -125,7 +127,7 @@ describe('PptxScrollPresentationElement', () => {
     el.render(buildPresentation([undefined, { effect: { kind: 'push', direction: 'r' } }]));
     const [slide0, slide1] = slideEls(el);
 
-    el.seekTo(1400); // 200ms into slide 1's transition (starts at 1200, "fast" = 400ms)
+    el.seekTo(200); // 200ms into slide 1's transition (starts at 0, "fast" = 400ms)
     expect(slide0?.style.display).toBe('block');
     expect(slide1?.style.display).toBe('block');
     expect(latestAnimation(slide0!)?.animation.currentTime).toBe(200);
@@ -141,17 +143,17 @@ describe('PptxScrollPresentationElement', () => {
     el.render(buildPresentation([undefined, { effect: { kind: 'push', direction: 'l' } }]));
     const [outgoing, incoming] = slideEls(el);
 
-    el.seekTo(1400); // 200ms into the transition, forward
+    el.seekTo(200); // 200ms into the transition, forward
     const outgoingAnim = latestAnimation(outgoing!)?.animation;
     const incomingAnim = latestAnimation(incoming!)?.animation;
 
-    el.seekTo(1250); // scrub back to 50ms in — same Animation instances, smaller currentTime
+    el.seekTo(50); // scrub back to 50ms in — same Animation instances, smaller currentTime
     expect(latestAnimation(outgoing!)?.animation).toBe(outgoingAnim);
     expect(outgoingAnim?.currentTime).toBe(50);
     expect(incomingAnim?.currentTime).toBe(50);
   });
 
-  it('cancels the conflicting sibling animation so a middle slide\'s own arrival is not silently shadowed by the next transition\'s departure off the same element+property', () => {
+  it("cancels the conflicting sibling animation so a middle slide's own arrival is not silently shadowed by the next transition's departure off the same element+property", () => {
     // Regression test for a real bug found via portrait-slides.pptx (3 slides, push throughout):
     // slide 1 is both segment 1's `incoming` target and segment 2's `outgoing` source, so it ends
     // up with two permanently fill:'both' Animations targeting its own `transform` — WAAPI's
@@ -172,23 +174,21 @@ describe('PptxScrollPresentationElement', () => {
     expect(slide1Anims).toHaveLength(2); // segment 1's incoming + segment 2's outgoing
 
     const incoming = slide1Anims.find(
-      (r) => JSON.stringify(r.keyframes) === JSON.stringify([
-        { transform: 'translate(-100%, 0)' },
-        { transform: 'translate(0, 0)' },
-      ]),
+      (r) =>
+        JSON.stringify(r.keyframes) ===
+        JSON.stringify([{ transform: 'translate(-100%, 0)' }, { transform: 'translate(0, 0)' }]),
     )?.animation;
     const outgoing = slide1Anims.find(
-      (r) => JSON.stringify(r.keyframes) === JSON.stringify([
-        { transform: 'translate(0, 0)' },
-        { transform: 'translate(-100%, 0)' },
-      ]),
+      (r) =>
+        JSON.stringify(r.keyframes) ===
+        JSON.stringify([{ transform: 'translate(0, 0)' }, { transform: 'translate(-100%, 0)' }]),
     )?.animation;
     expect(incoming).toBeDefined();
     expect(outgoing).toBeDefined();
 
-    el.seekTo(1400); // 200ms into segment 1's transition — slide 1 is arriving
+    el.seekTo(200); // 200ms into segment 1's transition — slide 1 is arriving
     expect(incoming?.currentTime).toBe(200);
-    // The conflicting sibling (segment 2's own departure, not due to start until ms 2800) must be
+    // The conflicting sibling (segment 2's own departure, not due to start until ms 400) must be
     // cancelled — left alive, it would permanently paint over slide 1 with its own first keyframe
     // (identity), which is exactly what an unanimated "hard cut" looks like.
     expect(outgoing?.playState).toBe('idle');
@@ -206,7 +206,8 @@ describe('PptxScrollPresentationElement', () => {
     const incoming = latestAnimation(slide1!)?.animation; // slide1's only Animation here
     expect(incoming?.currentTime).toBe(0);
 
-    el.seekTo(2000); // segment 1's own content phase — well past its transition window [1200, 1600)
+    el.seekTo(400); // straight to segment 1's own (zero-width) content phase — its transition
+    // window ([0, 400)) is never visited by any seekTo call in between.
     expect(incoming?.currentTime).toBe(400); // settled to the full "fast" (400ms) duration
   });
 
@@ -222,9 +223,9 @@ describe('PptxScrollPresentationElement', () => {
   it('clamps seekTo to [0, totalDurationMs]', () => {
     const el = newElement();
     el.render(buildPresentation([undefined, undefined]));
-    // slide 0 content (1200ms dwell) + synthetic push-up transition ("fast" = 400ms) + slide 1
-    // content (1200ms dwell) — even an unauthored transition still gets a segment, see above.
-    expect(el.totalDurationMs).toBe(2800);
+    // Zero-width content phases (no builds anywhere) + a synthetic push-up transition ("fast" =
+    // 400ms) — even an unauthored transition still gets a segment, see above.
+    expect(el.totalDurationMs).toBe(400);
 
     el.seekTo(-500);
     expect(slideEls(el)[0]?.style.display).toBe('block');
@@ -273,7 +274,8 @@ describe('PptxScrollPresentationElement', () => {
       el.seekTo(400); // 200ms delay + halfway through the 500ms fade
       expect(latestAnimation(target!)?.animation.currentTime).toBe(400);
 
-      el.seekTo(2000); // past the fade's own [0, 700] domain, but still within the slide's dwell
+      el.seekTo(2000); // past the fade's own [0, 700] domain — clamped to totalDurationMs (700),
+      // itself exactly the fade's own end (its content phase has no floor beyond what it needs)
       expect(latestAnimation(target!)?.animation.currentTime).toBe(700);
     });
   });
@@ -318,11 +320,11 @@ describe('PptxScrollPresentationElement', () => {
       const departing = slide0!.querySelector<HTMLElement>('[data-pptx-shape-id="1"]')!;
       const arriving = slide1!.querySelector<HTMLElement>('[data-pptx-shape-id="1"]')!;
 
-      el.seekTo(1400); // mid-transition (starts at 1200, "fast" = 400ms)
+      el.seekTo(200); // mid-transition (starts at 0, "fast" = 400ms)
       expect(departing.style.opacity).toBe('0');
       expect(latestAnimation(arriving)?.animation.currentTime).toBe(200);
 
-      el.seekTo(500); // scrub back into slide 0's own content phase
+      el.seekTo(0); // scrub back into slide 0's own (zero-width) content phase
       expect(departing.style.opacity).toBe('');
       expect(slide0?.style.display).toBe('block');
       expect(slide1?.style.display).toBe('none');
@@ -337,7 +339,7 @@ describe('PptxScrollPresentationElement', () => {
       el.render(presentation);
       const [slide0, slide1] = slideEls(el);
 
-      el.seekTo(1400);
+      el.seekTo(200);
       expect(latestAnimation(slide0!)?.keyframes).toEqual([{ opacity: 1 }, { opacity: 0 }]);
       expect(latestAnimation(slide1!)?.keyframes).toEqual([{ opacity: 0 }, { opacity: 1 }]);
     });
@@ -346,12 +348,15 @@ describe('PptxScrollPresentationElement', () => {
   describe('pixelsPerSecond', () => {
     it('sizes the scroll track from totalDurationMs * pixelsPerSecond / 1000', () => {
       const el = newElement();
-      el.render(buildPresentation([undefined])); // 1200ms dwell, default 600px/s
+      // A single slide with no builds has zero inherent duration (see scroll-timeline.ts's
+      // DEFAULT_MIN_DWELL_MS) — a second slide with an authored transition gives this deck a real,
+      // non-zero duration to size the track from: 400ms ("fast"), default 600px/s.
+      el.render(buildPresentation([undefined, { effect: { kind: 'fade' } }]));
       const spacer = el.shadowRoot?.querySelector<HTMLElement>('.pptx-scroll-spacer');
-      expect(spacer?.style.height).toBe('720px'); // 1200ms * 0.6px/ms
+      expect(spacer?.style.height).toBe('240px'); // 400ms * 0.6px/ms
 
       el.pixelsPerSecond = 1200;
-      expect(spacer?.style.height).toBe('1440px');
+      expect(spacer?.style.height).toBe('480px');
     });
 
     it("pads the spacer by the track's own clientHeight, since CSS's scrollable range is spacer.scrollHeight minus that, not the spacer's height alone", () => {
@@ -363,9 +368,9 @@ describe('PptxScrollPresentationElement', () => {
       const track = el.shadowRoot!.querySelector<HTMLElement>('.pptx-scroll-track')!;
       Object.defineProperty(track, 'clientHeight', { value: 500, configurable: true });
 
-      el.render(buildPresentation([undefined])); // 1200ms dwell, default 600px/s -> 720px content
+      el.render(buildPresentation([undefined, { effect: { kind: 'fade' } }])); // 400ms content, default 600px/s -> 240px content
       const spacer = el.shadowRoot?.querySelector<HTMLElement>('.pptx-scroll-spacer');
-      expect(spacer?.style.height).toBe('1220px'); // 720px content + 500px track height
+      expect(spacer?.style.height).toBe('740px'); // 240px content + 500px track height
     });
   });
 

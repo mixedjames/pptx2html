@@ -220,6 +220,7 @@ describe('renderShapeTreeNode style-matrix (p:style) fallback', () => {
     lineStyles: [
       { width: 25400, fill: { type: 'solid', color: { type: 'scheme', value: 'phClr' } } },
     ],
+    bgFillStyles: [],
   };
 
   it("resolves a shape's fillRef/lineRef when it has no explicit spPr fill/line (the PowerPoint Shape Styles gallery case)", () => {
@@ -340,7 +341,7 @@ describe('renderShapeTreeNode text body anchor and fontRef fallback', () => {
       document,
       shapeWithText('ctr'),
       IDENTITY_MAP,
-      contextWithFormatScheme({ name: 'Office', fillStyles: [], lineStyles: [] }),
+      contextWithFormatScheme({ name: 'Office', fillStyles: [], lineStyles: [], bgFillStyles: [] }),
     );
     const run = el.querySelector('.pptx-run') as HTMLElement;
     expect(run.textContent).toBe('42');

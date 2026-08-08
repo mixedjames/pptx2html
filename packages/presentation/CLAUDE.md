@@ -190,9 +190,20 @@ itself defines.
   `TextBody`'s effective vertical anchor, §21.1.2.1.1's `a:bodyPr/@anchor`, own value first then the
   same placeholder
   layout→master walk `resolveInheritedTransform` does, defaulting to `'t'`), `background.ts`
-  (`resolveEffectiveBackground` — slide → layout → master,
-  §19.3.1.7), `style-matrix.ts` (`resolveStyleFill`/`resolveStyleLine` — a `p:style` `fillRef`/
-  `lnRef` resolved against `FormatScheme`, `phClr` substitution included, §20.1.4.2.10/2.12),
+  (`resolveEffectiveBackground` — slide → layout → master, §19.3.1.7, returning a resolved `Fill`
+  directly rather than a `Background` wrapper — a part's own background counts whether it's a
+  literal `p:bgPr` fill (`CommonSlideData.background`) _or_ a `p:bgRef` style-matrix reference
+  (`CommonSlideData.backgroundRef`, resolved via `style-matrix.ts`'s `resolveBackgroundStyleFill`
+  below — see that file's own doc comment for why a part's background is two independent optional
+  fields, not a union, mirroring `ShapeProperties.fill` vs. `ShapeStyle.fillRef`); before a later
+  session's fix, a part whose only background was a `bgRef` resolved as if it had none at all,
+  silently falling through to the next part in the chain instead — caught via a real deck where
+  every slide but the first relied on exactly this), `style-matrix.ts` (`resolveStyleFill`/
+  `resolveStyleLine` — a `p:style` `fillRef`/`lnRef` resolved against `FormatScheme`, `phClr`
+  substitution included, §20.1.4.2.10/2.12; `resolveBackgroundStyleFill` — the same mechanism for
+  `p:bgRef`, against `FormatScheme.bgFillStyles` instead, with `idx`'s different numbering
+  convention for a background reference: 1–999 selects `fillStyleLst`, 1001+ selects
+  `bgFillStyleLst`, 1001 being that list's own first entry),
   `bullet.ts` (`formatAutoNumber`/`NumberingState` — auto-number label formatting and the
   running-counter state a numbered list needs across paragraphs, §20.1.10.51), `coordinate.ts`
   (`CoordinateMap`/`composeGroupMap`/`computeBox`/`ElementBox` — the affine math that turns a
@@ -239,9 +250,13 @@ code (search for "unmodeled for the skeleton"):
   practice, since Merge Shapes/Freeform-drawn outlines are typically authored as literal points, not
   guide-driven ones.
 - Effect and table style matrices referenced by a shape's/table's style index. `FormatScheme`'s
-  fill/line style matrices (`fillStyleLst`/`lnStyleLst`) _are_ modeled and consumed (see
-  `theme.ts`/`shape-style.ts` above) — but `effectStyleLst`/`bgFillStyleLst` (shadows and other
-  effects, plus a separate background-fill matrix) and table style matrices (banded rows, header
+  fill/line/background-fill style matrices (`fillStyleLst`/`lnStyleLst`/`bgFillStyleLst`) _are_
+  modeled and consumed (see `theme.ts`/`shape-style.ts` above, and `resolve/style-matrix.ts`'s
+  `resolveBackgroundStyleFill` — a later session, once a real deck showed `p:bgRef` silently
+  dropped as "unmodeled for the skeleton" was a real, high-impact gap: PowerPoint writes a
+  slide/layout/master's background this way by default, whenever it relies on the theme's own
+  background rather than an explicitly-picked fill, which is the common case, not an edge one) —
+  but `effectStyleLst` (shadows and other effects) and table style matrices (banded rows, header
   row styling, etc., referenced by a table's own style ID) remain bare/unmodeled.
 - Preset shape geometry (`geometry.ts`'s `PresetGeometry`) is modeled for every preset name (it's
   just a string + optional adjustment guides) but only a common subset of ~180 `ST_ShapeType`

@@ -92,6 +92,9 @@ function parseFormatScheme(node: XmlNode | undefined): FormatScheme {
     name: (node && attr(node, 'name')) || '',
     fillStyles: parseFillStyleList(node && findChild(node, 'fillStyleLst')),
     lineStyles: parseLineStyleList(node && findChild(node, 'lnStyleLst')),
+    // bgFillStyleLst is structurally just another fill list (§20.1.4.1.19) — same parser as
+    // fillStyleLst, reused verbatim.
+    bgFillStyles: parseFillStyleList(node && findChild(node, 'bgFillStyleLst')),
   };
 }
 

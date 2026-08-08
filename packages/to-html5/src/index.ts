@@ -78,5 +78,5 @@ export function resolvePresentationBackgroundCss(presentation: Presentation): st
   const background = resolveEffectiveBackground(slide);
   if (!background) return '#fff';
   const scheme = slide.layout.master.theme.colorScheme;
-  return resolveFillColor(background.fill, scheme) ?? '#fff';
+  return resolveFillColor(background, scheme) ?? '#fff';
 }

@@ -45,20 +45,23 @@ describe('resolveScrollTimeline', () => {
     expect(segment?.transition).toBeUndefined();
   });
 
-  it('a fully static slide gets exactly the minimum-dwell content duration', () => {
+  it('a fully static slide with no build animations gets zero content duration — no manufactured dead scroll distance', () => {
+    // Regression test for a real bug found via portrait-slides.pptx: a fixed floor here reserved
+    // scroll distance during which nothing whatsoever animated, which reads as broken/stuck rather
+    // than paced — see DEFAULT_MIN_DWELL_MS's own doc comment for the full reasoning.
     const presentation = presentationOf([slide()]);
     const { segments, totalDurationMs } = resolveScrollTimeline(presentation, vi.fn());
-    expect(segments[0]?.content).toEqual({ startMs: 0, endMs: 1200, fades: [] });
-    expect(totalDurationMs).toBe(1200);
+    expect(segments[0]?.content).toEqual({ startMs: 0, endMs: 0, fades: [] });
+    expect(totalDurationMs).toBe(0);
   });
 
-  it('a custom minDwellMs overrides the default floor', () => {
+  it('a custom minDwellMs opts into a guaranteed floor when the caller explicitly wants one', () => {
     const presentation = presentationOf([slide()]);
     const { totalDurationMs } = resolveScrollTimeline(presentation, vi.fn(), { minDwellMs: 300 });
     expect(totalDurationMs).toBe(300);
   });
 
-  it("content duration is the slide's own fades' latest end time when that exceeds the dwell floor", () => {
+  it("content duration is exactly the slide's own fades' latest end time, no floor added on top", () => {
     const presentation = presentationOf([
       slide({
         timing: {
@@ -72,7 +75,7 @@ describe('resolveScrollTimeline', () => {
       }),
     ]);
     const { segments } = resolveScrollTimeline(presentation, vi.fn());
-    expect(segments[0]?.content.endMs).toBe(2500); // 2000 delay + 500 duration, not the 1200 floor
+    expect(segments[0]?.content.endMs).toBe(2500); // 2000 delay + 500 duration
   });
 
   it('an authored push/fade transition plays as authored, timed with resolveTransitionDurationMs', () => {
@@ -82,12 +85,12 @@ describe('resolveScrollTimeline', () => {
     ]);
     const { segments } = resolveScrollTimeline(presentation, vi.fn());
     expect(segments[1]?.transition).toEqual({
-      startMs: 1200, // right after slide 0's own content (dwell floor)
-      endMs: 2200, // slow = 1000ms
+      startMs: 0, // right after slide 0's own (zero-width) content
+      endMs: 1000, // slow = 1000ms
       effect: { kind: 'push', direction: 'r' },
       morphMatch: undefined,
     });
-    expect(segments[1]?.content.startMs).toBe(2200);
+    expect(segments[1]?.content.startMs).toBe(1000);
   });
 
   it('no authored transition at all falls back to a synthetic push-up, unreported', () => {
@@ -95,7 +98,7 @@ describe('resolveScrollTimeline', () => {
     const report = vi.fn();
     const { segments } = resolveScrollTimeline(presentation, report);
     expect(segments[1]?.transition?.effect).toEqual({ kind: 'push', direction: 'u' });
-    expect(segments[1]?.transition?.endMs).toBe(1200 + 400); // absent speed defaults to "fast"
+    expect(segments[1]?.transition?.endMs).toBe(400); // absent speed defaults to "fast"
     expect(report).not.toHaveBeenCalled();
   });
 
@@ -144,21 +147,23 @@ describe('resolveScrollTimeline', () => {
     expect(report).toHaveBeenCalledWith('morph-match-degraded', expect.any(String), 1);
   });
 
-  it('chains multiple slides into one absolute-ms timeline in deck order', () => {
+  it('chains multiple slides into one absolute-ms timeline in deck order, with zero-width content phases when nothing animates', () => {
     const presentation = presentationOf([
-      slide(), // content: 0 -> 1200
-      slide({ transition: { effect: { kind: 'fade' } } }), // transition: 1200 -> 1600, content: 1600 -> 2800
-      slide({ transition: { effect: { kind: 'push', direction: 'l' } } }), // transition: 2800 -> 3200, content: 3200 -> 4400
+      slide(), // content: 0 -> 0 (no builds)
+      slide({ transition: { effect: { kind: 'fade' } } }), // transition: 0 -> 400, content: 400 -> 400
+      slide({ transition: { effect: { kind: 'push', direction: 'l' } } }), // transition: 400 -> 800, content: 800 -> 800
     ]);
     const { segments, totalDurationMs } = resolveScrollTimeline(presentation, vi.fn());
     expect(
       segments.map((s) => [s.transition?.startMs, s.content.startMs, s.content.endMs]),
     ).toEqual([
-      [undefined, 0, 1200],
-      [1200, 1600, 2800],
-      [2800, 3200, 4400],
+      [undefined, 0, 0],
+      [0, 400, 400],
+      [400, 800, 800],
     ]);
-    expect(totalDurationMs).toBe(4400);
+    // Every millisecond of the timeline is spent on an actual transition — none of it a dead,
+    // nothing-animating dwell — the direct consequence of the fix above.
+    expect(totalDurationMs).toBe(800);
   });
 
   it('forwards a build/behavior report from collectFadeAnimations, keyed to the right slide', () => {

@@ -35,14 +35,23 @@ export interface ScrollTimeline {
 }
 
 /**
- * A slide with no build animations at all (or one whose builds finish quickly) still needs some
- * scroll distance to sit in front of the user before the next slide's transition starts — without
- * a floor, a fully static slide would collapse to zero scroll-timeline length and effectively
- * disappear. Not spec-derived — a documented approximation, same tier as this package's other
- * best-effort magnitude defaults (`shape-geometry.ts`'s adjustment-guide defaults, `fill.ts`'s
- * pattern-hatch spacing).
+ * `0` by default — deliberately **not** a "give the user time to read a static slide" floor, even
+ * though an earlier version of this file used one (1200ms). See "Key design decision: scroll-driven
+ * playback" in `packages/to-html5/CLAUDE.md` for the full reasoning (a real bug, found via
+ * `portrait-slides.pptx`'s simplest possible case — three slides, push throughout, no builds at
+ * all): unlike real-time/autoplay playback, where a dwell is genuinely necessary because time keeps
+ * advancing regardless of what the user does, scroll position *is* user input here — a reader who
+ * wants more time already gets it for free by simply not scrolling further, at any point on the
+ * timeline, including exactly at a slide's fully-arrived resting frame. Reserving *extra* scroll
+ * distance during which nothing whatsoever changes doesn't buy a slower reader anything they didn't
+ * already have; it only costs every reader a stretch of scrolling that produces no visible feedback
+ * at all, which reads as broken/stuck, not paced. A segment's content phase should therefore span
+ * only whatever its own build animations genuinely need (`Math.max(0, ...fades.map(...))`, i.e. `0`
+ * when there are none) — still overridable via `options.minDwellMs` below for a caller that
+ * deliberately wants guaranteed scroll distance regardless of content (e.g. testing), but that's an
+ * opt-in, not the default.
  */
-const DEFAULT_MIN_DWELL_MS = 1200;
+const DEFAULT_MIN_DWELL_MS = 0;
 
 /**
  * Scroll mode's own fallback when a slide has no `transition` at all, or one whose `effect.kind`
@@ -77,6 +86,11 @@ const DEFAULT_SCROLL_TRANSITION_EFFECT: TransitionEffect = { kind: 'push', direc
  * The first slide never gets a `transition` segment, matching real-time playback's own behavior —
  * `goToSlide` is the only place a transition ever plays there too, and the initial slide is simply
  * shown, never navigated into.
+ *
+ * `options.minDwellMs` (default `0`, see `DEFAULT_MIN_DWELL_MS`'s own doc comment) is an opt-in
+ * floor on a segment's content-phase length, not a "give the reader time" default — every segment's
+ * content phase otherwise spans exactly however long its own build animations take, `0` if it has
+ * none, so scrolling never enters a stretch where nothing whatsoever is animating.
  */
 export function resolveScrollTimeline(
   presentation: Presentation,
