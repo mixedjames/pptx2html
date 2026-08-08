@@ -402,3 +402,9 @@ than a replacement, per the original design note's own guidance.
 - `packages/to-html5/CLAUDE.md` — rendering design decisions (coordinate math, percentage-based
   responsive layout, placeholder inheritance), scope boundary, test layout.
 - `docs/scroll-driven-playback.md` — design note for the scroll-driven playback feature (implemented).
+- `apps/pages/e2e/` — a minimal real-browser (Playwright/Chromium) regression suite, added after
+  three real bugs in a row turned out to be invisible to `packages/to-html5`'s `happy-dom`-based
+  unit tests (see that package's CLAUDE.md's "Key design decision: three behavioral scroll-mode
+  bugs"). Scoped to real layout/containment and real Web Animations composite behavior specifically
+  — not broad visual regression — and deliberately not wired into `npm test`/CI yet; run via
+  `npm run test:e2e`.

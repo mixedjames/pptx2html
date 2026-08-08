@@ -134,13 +134,20 @@ the auto dimension from the explicit one via the container's own `aspect-ratio` 
 `width` or `height` is definite, regardless of whether children are in normal flow or
 `position: absolute`) — so this class of bug is specifically about a _child's_ containing-block
 reference, not about the outer sizing mechanism itself, which was never at risk. **Not exercised by
-this pass**: `happy-dom` (this package's whole test environment) performs no real layout at all, so
-none of the above can be asserted by an automated test today — it was checked by reading the
-resolved CSS/cascade rules against real user-agent behavior, not by running anything. A real-browser
-(e.g. Playwright) regression suite asserting on actual `getBoundingClientRect()`s — nothing exceeds
-`:host`'s own rect, click/scroll produce identical rects for the same deck — would close that gap;
-not introduced this session (no such tooling exists in this repo yet, and adding one is a real
-infrastructure decision, not a drive-by).
+`happy-dom`**: this package's whole unit-test environment performs no real layout at all, so none of
+the above can be asserted by a unit test — it was originally checked by reading the resolved CSS/
+cascade rules against real user-agent behavior, not by running anything.
+
+**A real-browser regression suite now exists for exactly this gap** — `apps/pages/e2e/` (Playwright,
+Chromium only), added once three real bugs in a row (see "Key design decision: three behavioral
+scroll-mode bugs" below) turned out to be invisible to `happy-dom` and were only ever found by
+driving a real browser by hand each time. `layout-containment.spec.ts` asserts on actual
+`getBoundingClientRect()`s — nothing exceeds `:host`'s own rect, click/scroll produce identical
+rects for the same deck; `scroll-continuous-motion.spec.ts` covers the composite-order and
+dead-scroll-zone bugs from that same section. Deliberately scoped narrowly (two failure _classes_,
+not broad pixel-diffing visual regression) and **not wired into `npm test`/CI yet** — run via
+`npm run test:e2e` (repo root or `apps/pages`). See `apps/pages/playwright.config.ts`'s own doc
+comment for the full scope/rationale.
 
 ## Layout
 
@@ -1101,12 +1108,14 @@ pass.
 ## Key design decision: three behavioral scroll-mode bugs found via `portrait-slides.pptx` (a real, simple push-only deck)
 
 All three were caught only by actually driving the rendered element in a real Chromium (via a
-throwaway Playwright script — `happy-dom` implements no real layout and no real Web Animations
-composite semantics, so none of the three is visible to this package's own test suite without one).
+throwaway Playwright script at the time — `happy-dom` implements no real layout and no real Web
+Animations composite semantics, so none of the three is visible to this package's own test suite
+without one; `apps/pages/e2e/` now makes that a permanent, rerunnable suite instead of a one-off).
 All three are fixed now, with regression tests (`scroll-presentation-element.test.ts`/
-`scroll-timeline.test.ts`) covering what a unit test _can_ assert about each — but real-browser
-verification was what actually found and confirmed all three, not reasoning about the code alone;
-see the relevant doc comments below for each mechanism, this section for the narrative.
+`scroll-timeline.test.ts` for what a unit test _can_ assert, `apps/pages/e2e/` for what actually
+needs a real browser) — but real-browser verification was what actually found and confirmed all
+three, not reasoning about the code alone; see the relevant doc comments below for each mechanism,
+this section for the narrative.
 
 **Bug 1 — the last slide's own arrival never finished, however far the user scrolled: `#applyTrackHeight`
 sized the spacer to exactly `totalDurationMs * pixelsPerMs`, but CSS's own scrollable range is

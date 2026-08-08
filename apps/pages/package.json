@@ -5,10 +5,14 @@
   "type": "module",
   "scripts": {
     "build": "webpack --mode production",
-    "start": "webpack serve --mode development"
+    "start": "webpack serve --mode development",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@pptx2html/reader": "*",
     "@pptx2html/to-html5": "*"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1"
   }
 }
